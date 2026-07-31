@@ -64,6 +64,24 @@ class IngestionIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void unparseableDocumentEndsInFailedStatus() {
+        String token = demoToken();
+        ResponseEntity<Map<String, Object>> accepted =
+                uploadDocument(token, "broken.pdf", "%PDF-1.4 not actually a pdf".getBytes());
+        assertThat(accepted.getStatusCode().value()).isEqualTo(202);
+        String documentId = (String) accepted.getBody().get("id");
+
+        org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(60)).untilAsserted(() -> {
+            Map<String, Object> doc = listDocuments(token).stream()
+                    .filter(d -> documentId.equals(d.get("id")))
+                    .findFirst().orElseThrow();
+            assertThat(doc.get("status")).isIn("FAILED", "READY");
+            assertThat(doc.get("status")).isEqualTo("FAILED");
+            assertThat((String) doc.get("error")).isNotBlank();
+        });
+    }
+
+    @Test
     void rejectsUnsupportedExtensions() {
         ResponseEntity<Map<String, Object>> response =
                 uploadDocument(demoToken(), "malware.exe", "not really".getBytes());

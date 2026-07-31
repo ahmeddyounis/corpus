@@ -1,0 +1,58 @@
+name: Nightly answer-quality evals
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  judge-evals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Cache ONNX embedding model
+        uses: actions/cache@v4
+        with:
+          path: .onnx-cache
+          key: onnx-all-minilm-l6-v2-${{ runner.os }}
+
+      # Real RAG answers over the golden set, judged for faithfulness and
+      # relevance (gates at 0.80). A threshold breach fails the workflow.
+      - name: Run LLM-as-judge evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: ./gradlew nightlyEval --no-daemon
+
+      - name: Publish run summary
+        if: always()
+        run: |
+          {
+            echo "## Answer quality (LLM-as-judge)"
+            if [ -f build/reports/evals/answer-quality.json ]; then
+              echo '```json'
+              cat build/reports/evals/answer-quality.json
+              echo '```'
+            else
+              echo "_No report produced (missing ANTHROPIC_API_KEY secret or early failure)._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: answer-quality
+          path: build/reports/evals
+          retention-days: 30
+          if-no-files-found: ignore
