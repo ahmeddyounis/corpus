@@ -71,6 +71,9 @@ public class IngestionService {
     }
 
     void process(DocumentEntity doc, byte[] bytes) {
+        if (!documents.existsById(doc.id())) {
+            return;
+        }
         DocumentEntity current = documents.save(doc.processing());
         try {
             String text = extractor.extract(new ByteArrayInputStream(bytes), doc.filename());
@@ -91,6 +94,13 @@ public class IngestionService {
             long embedStart = System.nanoTime();
             vectorStore.add(aiDocuments);
             metrics.recordPhase("embedding", (System.nanoTime() - embedStart) / 1_000_000);
+            if (!documents.existsById(doc.id())) {
+                // Deleted while we were embedding: discard the chunks just written.
+                deleteChunks(doc.userId(), doc.id());
+                log.info("Document {} was deleted during ingestion; discarded {} chunks",
+                        doc.id(), chunks.size());
+                return;
+            }
             documents.save(current.ready(chunks.size()));
             log.info("Ingested document {} ({} chunks)", doc.filename(), chunks.size());
         } catch (Exception e) {
@@ -100,7 +110,9 @@ public class IngestionService {
             } catch (Exception cleanup) {
                 log.warn("Chunk cleanup after failure also failed for {}: {}", doc.id(), cleanup.getMessage());
             }
-            documents.save(current.failed(truncate(e.getMessage())));
+            if (documents.existsById(doc.id())) {
+                documents.save(current.failed(truncate(e.getMessage())));
+            }
         }
     }
 
