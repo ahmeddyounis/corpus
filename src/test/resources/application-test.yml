@@ -13,6 +13,8 @@ spring:
 corpus:
   embedding:
     dimension: 384
+  mcp:
+    anonymous-user: demo
   rate-limit:
     rpm: 500
   security:
