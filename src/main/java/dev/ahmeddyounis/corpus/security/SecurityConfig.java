@@ -5,6 +5,8 @@ import java.nio.charset.StandardCharsets;
 import javax.crypto.spec.SecretKeySpec;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -44,16 +46,19 @@ public class SecurityConfig {
         return http.build();
     }
 
+    /** The development fallback shipped in application.yml — public knowledge by definition. */
+    static final String DEV_DEFAULT_SECRET = "corpus-local-dev-secret-0123456789-abcdefghijklmnop";
+
     @Bean
-    JwtDecoder jwtDecoder(CorpusSecurityProperties properties) {
-        return NimbusJwtDecoder.withSecretKey(secretKey(properties))
+    JwtDecoder jwtDecoder(CorpusSecurityProperties properties, Environment environment) {
+        return NimbusJwtDecoder.withSecretKey(secretKey(properties, environment))
                 .macAlgorithm(MacAlgorithm.HS256)
                 .build();
     }
 
     @Bean
-    JwtEncoder jwtEncoder(CorpusSecurityProperties properties) {
-        return new NimbusJwtEncoder(new ImmutableSecret<>(secretKey(properties)));
+    JwtEncoder jwtEncoder(CorpusSecurityProperties properties, Environment environment) {
+        return new NimbusJwtEncoder(new ImmutableSecret<>(secretKey(properties, environment)));
     }
 
     @Bean
@@ -61,7 +66,7 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
-    private static SecretKeySpec secretKey(CorpusSecurityProperties properties) {
+    private static SecretKeySpec secretKey(CorpusSecurityProperties properties, Environment environment) {
         byte[] secret = properties.jwt().secret().getBytes(StandardCharsets.UTF_8);
         if (secret.length < 32) {
             // HS256 requires >= 256-bit keys; failing here beats a per-request
@@ -69,6 +74,14 @@ public class SecurityConfig {
             throw new IllegalStateException(
                     "corpus.security.jwt.secret must be at least 32 bytes (got " + secret.length
                             + "). Set CORPUS_JWT_SECRET to a random string of 32+ characters.");
+        }
+        if (environment.acceptsProfiles(Profiles.of("cloud"))
+                && DEV_DEFAULT_SECRET.equals(properties.jwt().secret())) {
+            // The dev fallback lives in a public repository; with it, anyone can mint
+            // valid tokens for any user id. Never allow it to serve the cloud profile.
+            throw new IllegalStateException(
+                    "The cloud profile must not run with the published development JWT secret. "
+                            + "Set CORPUS_JWT_SECRET to a private random string of 32+ characters.");
         }
         return new SecretKeySpec(secret, "HmacSHA256");
     }

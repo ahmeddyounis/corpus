@@ -18,10 +18,12 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * Token-bucket limits over {@code /api/**}: per authenticated user everywhere,
- * and per client IP on the anonymous token endpoint (credential-stuffing brake).
- * The user map is bounded by the real user population — keys come only from
- * verified JWT subjects. The IP map is size-capped as a growth backstop.
+ * Token-bucket limits over {@code /api/**} and {@code /mcp}: per authenticated
+ * user when a JWT is present, per client IP on the anonymous token endpoint
+ * (credential-stuffing brake) and on anonymous MCP calls (which reach the same
+ * costly retrieval/LLM paths as the REST API). The user map is bounded by the
+ * real user population — keys come only from verified JWT subjects. The IP map
+ * is size-capped as a growth backstop.
  * Instantiated directly by {@link SecurityConfig} — deliberately not a bean, so
  * Boot does not also register it as a plain servlet filter (which would double-count).
  */
@@ -42,20 +44,16 @@ public class RateLimitFilter extends OncePerRequestFilter {
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return !request.getRequestURI().startsWith("/api/");
+        String uri = request.getRequestURI();
+        return !(uri.startsWith("/api/") || uri.equals("/mcp") || uri.startsWith("/mcp/"));
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
-        if (TOKEN_ENDPOINT.equals(request.getRequestURI())) {
-            if (ipBuckets.size() > MAX_TRACKED_IPS) {
-                // Backstop against unbounded growth; resetting budgets at this scale
-                // is preferable to unbounded memory.
-                ipBuckets.clear();
-            }
-            Bucket bucket = ipBuckets.computeIfAbsent(request.getRemoteAddr(), ip -> newBucket(tokenRpm));
-            if (!consume(bucket, response)) {
+        String uri = request.getRequestURI();
+        if (TOKEN_ENDPOINT.equals(uri)) {
+            if (!consume(ipBucket("token:" + request.getRemoteAddr(), tokenRpm), response)) {
                 return;
             }
             filterChain.doFilter(request, response);
@@ -69,8 +67,23 @@ public class RateLimitFilter extends OncePerRequestFilter {
             if (!consume(bucket, response)) {
                 return;
             }
+        } else if (uri.equals("/mcp") || uri.startsWith("/mcp/")) {
+            // Anonymous MCP (local profiles map it to the demo user) still pays
+            // the standard per-caller budget, keyed by client IP.
+            if (!consume(ipBucket("mcp:" + request.getRemoteAddr(), rpm), response)) {
+                return;
+            }
         }
         filterChain.doFilter(request, response);
+    }
+
+    private Bucket ipBucket(String key, int perMinute) {
+        if (ipBuckets.size() > MAX_TRACKED_IPS) {
+            // Backstop against unbounded growth; resetting budgets at this scale
+            // is preferable to unbounded memory.
+            ipBuckets.clear();
+        }
+        return ipBuckets.computeIfAbsent(key, k -> newBucket(perMinute));
     }
 
     private static Bucket newBucket(int perMinute) {
