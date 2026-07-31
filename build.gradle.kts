@@ -62,6 +62,7 @@ dependencies {
     testImplementation("org.springframework.security:spring-security-test")
     testImplementation("org.testcontainers:testcontainers-junit-jupiter")
     testImplementation("org.testcontainers:testcontainers-postgresql")
+    testImplementation("org.awaitility:awaitility")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
@@ -69,4 +70,5 @@ tasks.test {
     useJUnitPlatform {
         excludeTags("nightly")
     }
+    maxHeapSize = "1g"
 }
