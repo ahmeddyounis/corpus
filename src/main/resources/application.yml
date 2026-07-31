@@ -62,6 +62,7 @@ corpus:
     candidate-k: 20
   rate-limit:
     rpm: ${CORPUS_RATE_LIMIT_RPM:30}
+    token-rpm: ${CORPUS_TOKEN_RATE_LIMIT_RPM:10}
   security:
     jwt:
       secret: ${CORPUS_JWT_SECRET:corpus-local-dev-secret-0123456789-abcdefghijklmnop}

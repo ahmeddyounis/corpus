@@ -18,50 +18,84 @@ import org.springframework.security.oauth2.server.resource.authentication.JwtAut
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * Per-user token bucket over {@code /api/**} (the anonymous token endpoint is exempt).
- * Instantiated directly by {@link SecurityConfig} — deliberately not a bean, so Boot
- * does not also register it as a plain servlet filter (which would double-count).
+ * Token-bucket limits over {@code /api/**}: per authenticated user everywhere,
+ * and per client IP on the anonymous token endpoint (credential-stuffing brake).
+ * The user map is bounded by the real user population — keys come only from
+ * verified JWT subjects. The IP map is size-capped as a growth backstop.
+ * Instantiated directly by {@link SecurityConfig} — deliberately not a bean, so
+ * Boot does not also register it as a plain servlet filter (which would double-count).
  */
 public class RateLimitFilter extends OncePerRequestFilter {
 
-    private final ConcurrentHashMap<UUID, Bucket> buckets = new ConcurrentHashMap<>();
+    private static final String TOKEN_ENDPOINT = "/api/auth/token";
+    private static final int MAX_TRACKED_IPS = 100_000;
+
+    private final ConcurrentHashMap<UUID, Bucket> userBuckets = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Bucket> ipBuckets = new ConcurrentHashMap<>();
     private final int rpm;
+    private final int tokenRpm;
 
     public RateLimitFilter(CorpusRateLimitProperties properties) {
         this.rpm = properties.rpm();
+        this.tokenRpm = properties.tokenRpm();
     }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        String uri = request.getRequestURI();
-        return !uri.startsWith("/api/") || uri.equals("/api/auth/token");
+        return !request.getRequestURI().startsWith("/api/");
     }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
+        if (TOKEN_ENDPOINT.equals(request.getRequestURI())) {
+            if (ipBuckets.size() > MAX_TRACKED_IPS) {
+                // Backstop against unbounded growth; resetting budgets at this scale
+                // is preferable to unbounded memory.
+                ipBuckets.clear();
+            }
+            Bucket bucket = ipBuckets.computeIfAbsent(request.getRemoteAddr(), ip -> newBucket(tokenRpm));
+            if (!consume(bucket, response)) {
+                return;
+            }
+            filterChain.doFilter(request, response);
+            return;
+        }
+
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth instanceof JwtAuthenticationToken jwt) {
             UUID userId = UUID.fromString(jwt.getToken().getSubject());
-            Bucket bucket = buckets.computeIfAbsent(userId, id -> Bucket.builder()
-                    .addLimit(limit -> limit.capacity(rpm).refillGreedy(rpm, Duration.ofMinutes(1)))
-                    .build());
-            ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
-            if (!probe.isConsumed()) {
-                byte[] body = "{\"error\":\"rate_limit_exceeded\"}".getBytes(StandardCharsets.UTF_8);
-                response.setStatus(429);
-                response.setHeader("Retry-After",
-                        String.valueOf(TimeUnit.NANOSECONDS.toSeconds(probe.getNanosToWaitForRefill()) + 1));
-                response.setContentType("application/json");
-                response.setContentLength(body.length);
-                response.getOutputStream().write(body);
-                // Commit immediately: an uncommitted error response can leave the
-                // connection in a state where clients retry the request.
-                response.flushBuffer();
+            Bucket bucket = userBuckets.computeIfAbsent(userId, id -> newBucket(rpm));
+            if (!consume(bucket, response)) {
                 return;
             }
-            response.setHeader("X-RateLimit-Remaining", String.valueOf(probe.getRemainingTokens()));
         }
         filterChain.doFilter(request, response);
+    }
+
+    private static Bucket newBucket(int perMinute) {
+        return Bucket.builder()
+                .addLimit(limit -> limit.capacity(perMinute).refillGreedy(perMinute, Duration.ofMinutes(1)))
+                .build();
+    }
+
+    /** Consumes one token; on rejection writes a committed 429 and returns false. */
+    private static boolean consume(Bucket bucket, HttpServletResponse response) throws IOException {
+        ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
+        if (probe.isConsumed()) {
+            response.setHeader("X-RateLimit-Remaining", String.valueOf(probe.getRemainingTokens()));
+            return true;
+        }
+        byte[] body = "{\"error\":\"rate_limit_exceeded\"}".getBytes(StandardCharsets.UTF_8);
+        response.setStatus(429);
+        response.setHeader("Retry-After",
+                String.valueOf(TimeUnit.NANOSECONDS.toSeconds(probe.getNanosToWaitForRefill()) + 1));
+        response.setContentType("application/json");
+        response.setContentLength(body.length);
+        response.getOutputStream().write(body);
+        // Commit immediately: an uncommitted error response can leave the
+        // connection in a state where clients retry the request.
+        response.flushBuffer();
+        return false;
     }
 }
