@@ -48,6 +48,9 @@ public class DocumentController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "File is empty");
         }
         String filename = file.getOriginalFilename();
+        if (filename != null && filename.length() > 255) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Filename exceeds 255 characters");
+        }
         if (!IngestionService.supported(filename)) {
             throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE,
                     "Supported extensions: " + IngestionService.SUPPORTED_EXTENSIONS);

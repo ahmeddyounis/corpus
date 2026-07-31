@@ -82,6 +82,14 @@ class IngestionIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void rejectsOverlongFilenames() {
+        ResponseEntity<Map<String, Object>> response =
+                uploadDocument(demoToken(), "a".repeat(300) + ".md", "content".getBytes());
+
+        assertThat(response.getStatusCode().value()).isEqualTo(400);
+    }
+
+    @Test
     void rejectsUnsupportedExtensions() {
         ResponseEntity<Map<String, Object>> response =
                 uploadDocument(demoToken(), "malware.exe", "not really".getBytes());
