@@ -16,6 +16,7 @@ import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -212,7 +213,14 @@ public class ChatService {
         }
         synchronized (this) {
             if (chatClient == null) {
-                ChatClient.Builder builder = chatClientBuilder.getIfAvailable();
+                ChatClient.Builder builder;
+                try {
+                    builder = chatClientBuilder.getIfAvailable();
+                } catch (BeansException e) {
+                    // The builder definition can exist while its ChatModel dependency
+                    // doesn't (keyless profile): treat as "no chat model configured".
+                    builder = null;
+                }
                 if (builder == null) {
                     throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
                             "No chat model configured. Activate the 'local' profile (Ollama) or the "

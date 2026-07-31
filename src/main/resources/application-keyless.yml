@@ -1,0 +1,22 @@
+# Everything except chat, with zero credentials: in-process ONNX embeddings.
+# Ingestion, hybrid search, MCP search/list, and metrics all work; /api/chat
+# and ask_documents return a clear 503. Used for the compose smoke test.
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/corpus}
+    username: ${SPRING_DATASOURCE_USERNAME:corpus}
+    password: ${SPRING_DATASOURCE_PASSWORD:corpus}
+  ai:
+    model:
+      chat: none
+      embedding: transformers
+    embedding:
+      transformer:
+        cache:
+          directory: ${CORPUS_ONNX_CACHE:/tmp/corpus-onnx}
+
+corpus:
+  embedding:
+    dimension: 384
+  mcp:
+    anonymous-user: demo
