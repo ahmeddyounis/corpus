@@ -1,0 +1,28 @@
+# Fully local, keyless: Ollama serves chat + embeddings (compose pulls the models).
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/corpus}
+    username: ${SPRING_DATASOURCE_USERNAME:corpus}
+    password: ${SPRING_DATASOURCE_PASSWORD:corpus}
+  ai:
+    model:
+      chat: ollama
+      embedding: ollama
+    ollama:
+      base-url: ${SPRING_AI_OLLAMA_BASE_URL:http://localhost:11434}
+      chat:
+        model: ${CORPUS_CHAT_MODEL:qwen3:4b}
+      embedding:
+        model: ${CORPUS_EMBEDDING_MODEL:nomic-embed-text}
+      init:
+        # The compose ollama-init service pulls models; the app never should.
+        pull-model-strategy: never
+
+corpus:
+  embedding:
+    # nomic-embed-text produces 768-dimension vectors. Switching embedding
+    # models means wiping the store: docker compose down -v && docker compose up
+    dimension: 768
+  mcp:
+    # Anonymous MCP calls (e.g. Claude Desktop without headers) act as demo.
+    anonymous-user: demo

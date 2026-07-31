@@ -1,0 +1,9 @@
+.git
+.gradle
+build
+.onnx-cache
+.idea
+docs
+*.md
+!README.md
+.env

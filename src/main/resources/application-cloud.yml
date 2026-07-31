@@ -1,0 +1,30 @@
+# Cloud chat provider (Anthropic default, OpenAI via CORPUS_CHAT_PROVIDER=openai).
+# Embeddings default to the in-process ONNX model (keyless, 384-dim); opt into
+# OpenAI embeddings with CORPUS_EMBEDDING_PROVIDER=openai + CORPUS_EMBEDDING_DIMENSION=1536.
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/corpus}
+    username: ${SPRING_DATASOURCE_USERNAME:corpus}
+    password: ${SPRING_DATASOURCE_PASSWORD:corpus}
+  ai:
+    model:
+      chat: ${CORPUS_CHAT_PROVIDER:anthropic}
+      embedding: ${CORPUS_EMBEDDING_PROVIDER:transformers}
+    anthropic:
+      api-key: ${ANTHROPIC_API_KEY:}
+      chat:
+        model: ${CORPUS_CHAT_MODEL:claude-sonnet-4-5}
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      chat:
+        model: ${CORPUS_CHAT_MODEL:gpt-4o-mini}
+      embedding:
+        model: ${CORPUS_EMBEDDING_MODEL:text-embedding-3-small}
+    embedding:
+      transformer:
+        cache:
+          directory: ${CORPUS_ONNX_CACHE:${user.home}/.cache/corpus-onnx}
+
+corpus:
+  embedding:
+    dimension: ${CORPUS_EMBEDDING_DIMENSION:384}

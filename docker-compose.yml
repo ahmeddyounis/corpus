@@ -1,0 +1,93 @@
+name: corpus
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: corpus
+      POSTGRES_PASSWORD: corpus
+      POSTGRES_DB: corpus
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U corpus -d corpus"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # One-shot: pulls the chat + embedding models into the shared volume.
+  # First run downloads several GB; later runs are instant.
+  ollama-init:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ollama pull ${CORPUS_CHAT_MODEL:-qwen3:4b} && ollama pull ${CORPUS_EMBEDDING_MODEL:-nomic-embed-text}"]
+    restart: "no"
+
+  app:
+    build: .
+    image: corpus:latest
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/corpus
+      SPRING_DATASOURCE_USERNAME: corpus
+      SPRING_DATASOURCE_PASSWORD: corpus
+      SPRING_AI_OLLAMA_BASE_URL: http://ollama:11434
+      CORPUS_CHAT_MODEL: ${CORPUS_CHAT_MODEL:-qwen3:4b}
+      CORPUS_EMBEDDING_MODEL: ${CORPUS_EMBEDDING_MODEL:-nomic-embed-text}
+      CORPUS_JWT_SECRET: ${CORPUS_JWT_SECRET:-corpus-local-dev-secret-0123456789-abcdefghijklmnop}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/8080' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 30s
+
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: [monitoring]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles: [monitoring]
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docs/grafana-dashboard.json:/var/lib/grafana/dashboards/corpus.json:ro
+
+volumes:
+  pgdata:
+  ollama-models:
