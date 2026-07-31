@@ -52,7 +52,15 @@ public class IngestionService {
 
     public DocumentEntity upload(UUID userId, String filename, String contentType, byte[] bytes) {
         DocumentEntity saved = documents.save(DocumentEntity.create(userId, filename, contentType, bytes.length));
-        ingestionExecutor.submit(() -> process(saved, bytes));
+        ingestionExecutor.submit(() -> {
+            try {
+                process(saved, bytes);
+            } catch (Throwable t) {
+                // The Future is discarded; without this, task failures (e.g. a status
+                // save racing a concurrent delete) would vanish without a log line.
+                log.error("Ingestion task for document {} failed unexpectedly", saved.id(), t);
+            }
+        });
         return saved;
     }
 
