@@ -5,10 +5,12 @@ import dev.ahmeddyounis.corpus.ops.RagMetrics;
 import dev.ahmeddyounis.corpus.retrieval.RetrievalService;
 import dev.ahmeddyounis.corpus.retrieval.ScoredChunk;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
+import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
@@ -108,8 +110,11 @@ public class ChatService {
                 ? response.getResult().getOutput().getText()
                 : "";
         ChatResponseMetadata metadata = response != null ? response.getMetadata() : null;
-        recordUsage(metadata != null ? metadata.getUsage() : null,
-                metadata != null ? metadata.getModel() : null);
+        Usage syncUsage = metadata != null ? metadata.getUsage() : null;
+        if (syncUsage != null) {
+            recordUsage(syncUsage.getPromptTokens(), syncUsage.getCompletionTokens(),
+                    metadata.getModel());
+        }
         metrics.recordPhase("full_response", elapsedMs(start));
         return new SyncAnswer(content, citations(chunks), conversation.id());
     }
@@ -132,40 +137,56 @@ public class ChatService {
                     .chatResponse();
 
             long firstTokenMs = -1;
-            Usage usage = null;
+            int promptTokens = 0;
+            int completionTokens = 0;
+            boolean usageSeen = false;
             String model = null;
-            for (ChatResponse response : stream.toIterable()) {
-                String delta = response.getResult() != null && response.getResult().getOutput() != null
-                        ? response.getResult().getOutput().getText()
-                        : null;
-                if (delta != null && !delta.isEmpty()) {
-                    if (firstTokenMs < 0) {
-                        firstTokenMs = elapsedMs(start);
-                        metrics.recordPhase("first_token", firstTokenMs);
+            // try-with-resources over toStream(): closing the stream cancels the
+            // upstream subscription, so a client disconnect (send() throwing) stops
+            // the provider call instead of letting it generate — and bill — to
+            // completion in the background. toIterable() offers no such hook.
+            try (Stream<ChatResponse> responses = stream.toStream()) {
+                for (Iterator<ChatResponse> it = responses.iterator(); it.hasNext(); ) {
+                    ChatResponse response = it.next();
+                    String delta = response.getResult() != null && response.getResult().getOutput() != null
+                            ? response.getResult().getOutput().getText()
+                            : null;
+                    if (delta != null && !delta.isEmpty()) {
+                        if (firstTokenMs < 0) {
+                            firstTokenMs = elapsedMs(start);
+                            metrics.recordPhase("first_token", firstTokenMs);
+                        }
+                        emitter.send(SseEmitter.event().name("token").data(Map.of("text", delta)));
                     }
-                    emitter.send(SseEmitter.event().name("token").data(Map.of("text", delta)));
-                }
-                if (response.getMetadata() != null) {
-                    Usage candidate = response.getMetadata().getUsage();
-                    if (candidate != null && candidate.getTotalTokens() != null && candidate.getTotalTokens() > 0) {
-                        usage = candidate;
-                    }
-                    String candidateModel = response.getMetadata().getModel();
-                    if (candidateModel != null && !candidateModel.isBlank()) {
-                        model = candidateModel;
+                    if (response.getMetadata() != null) {
+                        Usage candidate = response.getMetadata().getUsage();
+                        if (candidate != null && candidate.getTotalTokens() != null
+                                && candidate.getTotalTokens() > 0) {
+                            // Streaming tool-calling turns concatenate one usage chunk per
+                            // model round, and rounds do not accumulate on the streaming
+                            // path — summing captures the tool round instead of dropping it.
+                            promptTokens += candidate.getPromptTokens() != null ? candidate.getPromptTokens() : 0;
+                            completionTokens +=
+                                    candidate.getCompletionTokens() != null ? candidate.getCompletionTokens() : 0;
+                            usageSeen = true;
+                        }
+                        String candidateModel = response.getMetadata().getModel();
+                        if (candidateModel != null && !candidateModel.isBlank()) {
+                            model = candidateModel;
+                        }
                     }
                 }
             }
 
             long totalMs = elapsedMs(start);
             metrics.recordPhase("full_response", totalMs);
-            Double cost = recordUsage(usage, model);
+            Double cost = usageSeen ? recordUsage(promptTokens, completionTokens, model) : null;
 
             emitter.send(SseEmitter.event().name("citations").data(citations(chunks)));
             emitter.send(SseEmitter.event().name("usage").data(new UsageStats(
-                    usage != null ? usage.getPromptTokens() : null,
-                    usage != null ? usage.getCompletionTokens() : null,
-                    usage != null ? usage.getTotalTokens() : null,
+                    usageSeen ? promptTokens : null,
+                    usageSeen ? completionTokens : null,
+                    usageSeen ? promptTokens + completionTokens : null,
                     cost,
                     retrievalMs, firstTokenMs, totalMs)));
             emitter.send(SseEmitter.event().name("done").data(Map.of(
@@ -184,13 +205,10 @@ public class ChatService {
     }
 
     /** Records token/cost metrics; returns the estimated cost when the model is priced. */
-    private Double recordUsage(Usage usage, String model) {
-        if (usage == null) {
-            return null;
-        }
+    private Double recordUsage(Integer promptTokens, Integer completionTokens, String model) {
         String modelId = CostEstimator.normalize(model);
-        metrics.recordTokens(provider, modelId, usage.getPromptTokens(), usage.getCompletionTokens());
-        return costEstimator.estimate(modelId, usage.getPromptTokens(), usage.getCompletionTokens())
+        metrics.recordTokens(provider, modelId, promptTokens, completionTokens);
+        return costEstimator.estimate(modelId, promptTokens, completionTokens)
                 .map(cost -> {
                     metrics.recordCost(provider, modelId, cost);
                     return cost;
