@@ -13,4 +13,10 @@ public class AsyncConfig {
     ExecutorService ingestionExecutor() {
         return Executors.newVirtualThreadPerTaskExecutor();
     }
+
+    /** The two retrieval legs (vector + full-text) run in parallel on virtual threads. */
+    @Bean(destroyMethod = "close")
+    ExecutorService retrievalExecutor() {
+        return Executors.newVirtualThreadPerTaskExecutor();
+    }
 }

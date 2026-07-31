@@ -4,23 +4,14 @@ import dev.ahmeddyounis.corpus.security.JwtService;
 import dev.ahmeddyounis.corpus.security.UserAccount;
 import dev.ahmeddyounis.corpus.security.UserRepository;
 import dev.ahmeddyounis.corpus.support.AbstractIntegrationTest;
-import java.time.Duration;
-import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.core.ParameterizedTypeReference;
-import org.springframework.core.io.ByteArrayResource;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.util.LinkedMultiValueMap;
-import org.springframework.util.MultiValueMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.awaitility.Awaitility.await;
 
 class IngestionIntegrationTest extends AbstractIntegrationTest {
 
@@ -39,46 +30,11 @@ class IngestionIntegrationTest extends AbstractIntegrationTest {
         }
     }
 
-    private ResponseEntity<Map<String, Object>> upload(String token, String filename, byte[] bytes) {
-        MultiValueMap<String, Object> form = new LinkedMultiValueMap<>();
-        form.add("file", new ByteArrayResource(bytes) {
-            @Override
-            public String getFilename() {
-                return filename;
-            }
-        });
-        return restClient().post().uri("/api/documents")
-                .header("Authorization", "Bearer " + token)
-                .contentType(MediaType.MULTIPART_FORM_DATA)
-                .body(form)
-                .retrieve()
-                .toEntity(new ParameterizedTypeReference<>() {
-                });
-    }
-
-    private List<Map<String, Object>> listDocuments(String token) {
-        return restClient().get().uri("/api/documents")
-                .header("Authorization", "Bearer " + token)
-                .retrieve()
-                .body(new ParameterizedTypeReference<>() {
-                });
-    }
-
     @Test
     void uploadIngestsChunksAndDeleteCleansUp() throws Exception {
         String token = demoToken();
 
-        ResponseEntity<Map<String, Object>> accepted = upload(token, "sla.md", fixture());
-        assertThat(accepted.getStatusCode().value()).isEqualTo(202);
-        String documentId = (String) accepted.getBody().get("id");
-        assertThat(accepted.getBody().get("status")).isEqualTo("PENDING");
-
-        await().atMost(Duration.ofSeconds(90)).pollInterval(Duration.ofMillis(500)).untilAsserted(() -> {
-            Map<String, Object> doc = listDocuments(token).stream()
-                    .filter(d -> documentId.equals(d.get("id")))
-                    .findFirst().orElseThrow();
-            assertThat(doc.get("status")).as("error: %s", doc.get("error")).isEqualTo("READY");
-        });
+        String documentId = uploadAndAwaitReady(token, "sla.md", fixture());
 
         Map<String, Object> doc = listDocuments(token).stream()
                 .filter(d -> documentId.equals(d.get("id")))
@@ -110,7 +66,7 @@ class IngestionIntegrationTest extends AbstractIntegrationTest {
     @Test
     void rejectsUnsupportedExtensions() {
         ResponseEntity<Map<String, Object>> response =
-                upload(demoToken(), "malware.exe", "not really".getBytes());
+                uploadDocument(demoToken(), "malware.exe", "not really".getBytes());
 
         assertThat(response.getStatusCode().value()).isEqualTo(415);
     }
@@ -118,7 +74,7 @@ class IngestionIntegrationTest extends AbstractIntegrationTest {
     @Test
     void documentsAreScopedPerUser() throws Exception {
         String demoToken = demoToken();
-        ResponseEntity<Map<String, Object>> accepted = upload(demoToken, "scoped.md", fixture());
+        ResponseEntity<Map<String, Object>> accepted = uploadDocument(demoToken, "scoped.md", fixture());
         String documentId = (String) accepted.getBody().get("id");
 
         UserAccount other = users.findByUsername("intruder")
@@ -147,7 +103,7 @@ class IngestionIntegrationTest extends AbstractIntegrationTest {
 
     @Test
     void uploadRequiresAuthentication() {
-        ResponseEntity<Map<String, Object>> response = upload("not-a-token", "sla.md", "x".getBytes());
+        ResponseEntity<Map<String, Object>> response = uploadDocument("not-a-token", "sla.md", "x".getBytes());
 
         assertThat(response.getStatusCode().value()).isEqualTo(401);
     }
