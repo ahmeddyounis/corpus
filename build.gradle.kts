@@ -3,7 +3,7 @@ import org.springframework.boot.gradle.plugin.SpringBootPlugin
 plugins {
     java
     jacoco
-    id("org.springframework.boot") version "4.0.7"
+    id("org.springframework.boot") version "4.1.0"
 }
 
 group = "dev.ahmeddyounis"
