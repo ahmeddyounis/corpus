@@ -1,0 +1,154 @@
+# Golden evaluation set for Corpus retrieval + answer quality.
+# Each case: a question, the sample document(s) that contain the answer, and a
+# reference answer used by the nightly LLM-as-judge evals. Per sample document
+# there are two flavors: one keyword-heavy question (exercises the full-text
+# leg) and one paraphrase (exercises the vector leg). Changes here are
+# reviewed like code — the CI thresholds are only as honest as this file.
+version: 1
+cases:
+  - id: arch-monolith-why
+    question: "Why is Corpus built as a modular monolith instead of microservices?"
+    expected_sources: [corpus-architecture.md]
+    reference_answer: >-
+      At this scale network boundaries add serialization overhead, deployment
+      orchestration, and distributed failure modes without benefit, since the
+      hot path is dominated by model inference latency. One deployable keeps
+      the demo runnable with a single docker compose up, keeps stack traces
+      whole, and keeps refactoring cheap, while strict package boundaries
+      (ingestion, retrieval, chat, mcp, ops, security) preserve the seams
+      where services could split later.
+
+  - id: arch-first-split
+    question: "If the application ever had to be broken apart into separate services, which part should be extracted first and why?"
+    expected_sources: [corpus-architecture.md]
+    reference_answer: >-
+      Ingestion would be extracted first: it is already asynchronous,
+      communicates through the database, and has bursty resource demands from
+      parsing large documents. Retrieval would be the second seam as a
+      stateless search service over the same PostgreSQL.
+
+  - id: pgvector-hnsw-params
+    question: "What do the m and ef_construction parameters control in the HNSW index?"
+    expected_sources: [pgvector-guide.md]
+    reference_answer: >-
+      m controls how many bidirectional links each node keeps in the graph
+      (Corpus uses 16); higher values build a denser graph with better recall
+      at the cost of memory and build time. ef_construction (Corpus uses 64)
+      controls the candidate-list size during index construction; larger
+      values explore more neighbors per insertion and produce a higher-quality
+      graph at slower build speed.
+
+  - id: pgvector-distance-choice
+    question: "Which similarity measure does the vector index use, and why was it chosen?"
+    expected_sources: [pgvector-guide.md]
+    reference_answer: >-
+      Cosine distance (vector_cosine_ops, the <=> operator), because sentence
+      embedding models are trained for cosine similarity. With normalized
+      embeddings cosine and inner product rank identically, and cosine is the
+      safe default when normalization cannot be guaranteed.
+
+  - id: chunking-defaults
+    question: "What are the default values of CORPUS_CHUNK_SIZE and CORPUS_CHUNK_OVERLAP?"
+    expected_sources: [chunking-strategies.md]
+    reference_answer: >-
+      The default chunk size is 512 tokens and the default overlap is 64
+      tokens, counted with the cl100k_base tokenizer; the window advances by
+      size minus overlap.
+
+  - id: chunking-overlap-purpose
+    question: "Why do neighboring text pieces share some words at their edges?"
+    expected_sources: [chunking-strategies.md]
+    reference_answer: >-
+      The 64-token overlap heals boundary cuts: a sentence or fact that
+      straddles a window edge appears whole in the next window, so at least
+      one chunk preserves it intact. The cost is modest duplication of stored
+      tokens.
+
+  - id: evals-thresholds
+    question: "What thresholds gate recall@5 and MRR in CI?"
+    expected_sources: [rag-evaluation.md]
+    reference_answer: >-
+      The build gates retrieval at recall@5 of at least 0.85 and Mean
+      Reciprocal Rank of at least 0.70, computed per pull request over the
+      golden set with deterministic in-process embeddings.
+
+  - id: evals-hallucination-check
+    question: "How does the project check that generated answers are not making things up?"
+    expected_sources: [rag-evaluation.md]
+    reference_answer: >-
+      With nightly LLM-as-judge evals: a judge model scores each answer's
+      faithfulness (every claim supported by the retrieved context, no
+      hallucinated additions) and answer relevance on a 0 to 1 scale, and the
+      build gates both at a mean of at least 0.80.
+
+  - id: mcp-session-header
+    question: "What is the Mcp-Session-Id header used for?"
+    expected_sources: [mcp-protocol.md]
+    reference_answer: >-
+      The server assigns a session during the initialize handshake and the
+      client echoes it back in the Mcp-Session-Id header on every subsequent
+      request of that session over the streamable HTTP transport.
+
+  - id: mcp-claude-desktop
+    question: "How can Claude Desktop use this service's search from inside a conversation?"
+    expected_sources: [mcp-protocol.md]
+    reference_answer: >-
+      Corpus is an MCP server: Claude Desktop connects over the streamable
+      HTTP transport at /mcp, discovers tools via tools/list, and can then
+      call search_documents, ask_documents, and list_documents as native
+      tools during a conversation.
+
+  - id: jwt-algorithm-claims
+    question: "Which signing algorithm secures the JWTs and which claim carries the user id?"
+    expected_sources: [jwt-security-primer.md]
+    reference_answer: >-
+      Tokens are signed with HMAC-SHA256 (HS256) using a symmetric secret of
+      at least 256 bits, and the sub claim carries the user's UUID; tokens
+      live for 24 hours.
+
+  - id: jwt-cross-user
+    question: "Why can't a valid token for one user be used to read another user's documents?"
+    expected_sources: [jwt-security-primer.md]
+    reference_answer: >-
+      Authorization is structural: the authenticated user's UUID from the
+      token's subject claim is applied as a filter in SQL queries and vector
+      filter expressions at the storage layer, so queries for another user's
+      data physically return nothing — scoping does not depend on controller
+      checks.
+
+  - id: obs-cost-metric
+    question: "What does the corpus_llm_cost_estimate_usd_total metric represent?"
+    expected_sources: [observability-llm.md]
+    reference_answer: >-
+      An estimated LLM spend counter: token usage per model is multiplied by
+      a configurable price table (dollars per million tokens) to attribute
+      approximate cost by provider and model — intended for trends and
+      attribution, not accounting-grade precision.
+
+  - id: obs-slowness-diagnosis
+    question: "How can I tell whether slowness comes from the database lookup or from the language model?"
+    expected_sources: [observability-llm.md]
+    reference_answer: >-
+      Per-phase latency timers separate the pipeline: a slow retrieval p95
+      points at the database or candidate set, while fast retrieval with a
+      slow first_token phase points at the model provider or prompt size.
+      Each phase publishes histogram buckets so Prometheus can compute
+      percentiles.
+
+  - id: springai-provider-switch
+    question: "What does the spring.ai.model.chat property select?"
+    expected_sources: [spring-ai-overview.md]
+    reference_answer: >-
+      It selects which chat provider autoconfigures the active ChatModel —
+      anthropic, openai, ollama, or none to disable chat — making provider
+      switching a configuration change rather than a code change; embeddings
+      are selected independently via spring.ai.model.embedding.
+
+  - id: springai-memory
+    question: "How does the assistant remember earlier messages in the same conversation?"
+    expected_sources: [spring-ai-overview.md]
+    reference_answer: >-
+      A memory advisor in the ChatClient advisor chain loads the last twenty
+      messages of the active conversation into the prompt before each call
+      and persists new turns afterwards, keyed by a conversation id
+      parameter.
