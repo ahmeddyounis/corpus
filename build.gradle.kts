@@ -72,3 +72,17 @@ tasks.test {
     }
     maxHeapSize = "1g"
 }
+
+// Judge-based answer-quality evals against a real model. Needs ANTHROPIC_API_KEY;
+// without it the tagged tests are skipped and the task succeeds quietly.
+tasks.register<Test>("nightlyEval") {
+    description = "Runs LLM-as-judge answer quality evals (faithfulness, relevance)"
+    group = "verification"
+    testClassesDirs = sourceSets.test.get().output.classesDirs
+    classpath = sourceSets.test.get().runtimeClasspath
+    useJUnitPlatform {
+        includeTags("nightly")
+    }
+    maxHeapSize = "1g"
+    shouldRunAfter(tasks.test)
+}
