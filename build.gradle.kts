@@ -73,6 +73,51 @@ tasks.test {
     maxHeapSize = "1g"
 }
 
+jacoco {
+    toolVersion = "0.8.15"
+}
+
+// Coverage is measured on the core packages; configuration carriers and the
+// launcher are excluded so the gate tracks logic, not boilerplate.
+val coverageClassDirs = fun(): FileTree {
+    return fileTree(layout.buildDirectory.dir("classes/java/main")) {
+        include(
+            "dev/ahmeddyounis/corpus/ingestion/**",
+            "dev/ahmeddyounis/corpus/retrieval/**",
+            "dev/ahmeddyounis/corpus/chat/**",
+            "dev/ahmeddyounis/corpus/security/**",
+        )
+        exclude("**/*Properties*", "**/*Config*")
+    }
+}
+
+tasks.jacocoTestReport {
+    dependsOn(tasks.test)
+    classDirectories.setFrom(coverageClassDirs())
+    reports {
+        xml.required = true
+        html.required = true
+    }
+}
+
+tasks.jacocoTestCoverageVerification {
+    dependsOn(tasks.jacocoTestReport)
+    classDirectories.setFrom(coverageClassDirs())
+    violationRules {
+        rule {
+            limit {
+                counter = "LINE"
+                value = "COVEREDRATIO"
+                minimum = "0.80".toBigDecimal()
+            }
+        }
+    }
+}
+
+tasks.check {
+    dependsOn(tasks.jacocoTestCoverageVerification)
+}
+
 // Judge-based answer-quality evals against a real model. Needs ANTHROPIC_API_KEY;
 // without it the tagged tests are skipped and the task succeeds quietly.
 tasks.register<Test>("nightlyEval") {
