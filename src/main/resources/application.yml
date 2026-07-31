@@ -34,6 +34,13 @@ spring:
         repository:
           jdbc:
             initialize-schema: never
+    mcp:
+      server:
+        name: corpus
+        version: 0.1.0
+        # The autoconfiguration gate requires this to be explicit (matchIfMissing=false);
+        # without it the legacy SSE transport wins.
+        protocol: STREAMABLE
   flyway:
     placeholders:
       vector_dimension: ${corpus.embedding.dimension}
@@ -61,3 +68,6 @@ corpus:
       ttl: 24h
   embedding:
     dimension: 384
+  mcp:
+    # When set, unauthenticated /mcp calls act as this account (keyless profiles only).
+    anonymous-user: ""
