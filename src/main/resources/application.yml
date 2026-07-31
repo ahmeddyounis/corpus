@@ -58,5 +58,6 @@ corpus:
   security:
     jwt:
       secret: ${CORPUS_JWT_SECRET:corpus-local-dev-secret-0123456789-abcdefghijklmnop}
+      ttl: 24h
   embedding:
     dimension: 384
