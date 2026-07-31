@@ -13,9 +13,15 @@ spring:
       max-request-size: 30MB
   ai:
     # Providers are opted into per profile; `none` keeps unused autoconfigurations off.
+    # chat/embedding are overridden per profile; the other modalities stay off for good.
     model:
       chat: none
       embedding: none
+      image: none
+      moderation: none
+      audio:
+        speech: none
+        transcription: none
     vectorstore:
       pgvector:
         # Flyway owns all DDL (see db/migration); never let the store create schema.

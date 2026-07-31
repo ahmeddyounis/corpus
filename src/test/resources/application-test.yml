@@ -1,0 +1,20 @@
+spring:
+  ai:
+    model:
+      # Chat is stubbed in tests (see support/StubChatConfig); embeddings run
+      # in-process via ONNX all-MiniLM-L6-v2 so the suite is keyless.
+      chat: none
+      embedding: transformers
+    embedding:
+      transformer:
+        cache:
+          directory: ${user.dir}/.onnx-cache
+
+corpus:
+  embedding:
+    dimension: 384
+  rate-limit:
+    rpm: 500
+  security:
+    jwt:
+      secret: corpus-test-secret-0123456789-abcdefghijklmnopqrstuvwxyz
