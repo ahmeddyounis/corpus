@@ -71,3 +71,18 @@ corpus:
   mcp:
     # When set, unauthenticated /mcp calls act as this account (keyless profiles only).
     anonymous-user: ""
+  # USD per million tokens; unknown models simply record no cost.
+  pricing:
+    models:
+      claude-sonnet-4-5:
+        input-per-mtok: 3.0
+        output-per-mtok: 15.0
+      claude-haiku-4-5:
+        input-per-mtok: 1.0
+        output-per-mtok: 5.0
+      gpt-4o-mini:
+        input-per-mtok: 0.15
+        output-per-mtok: 0.6
+      "qwen3:4b":
+        input-per-mtok: 0.0
+        output-per-mtok: 0.0

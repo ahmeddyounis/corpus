@@ -1,5 +1,6 @@
 package dev.ahmeddyounis.corpus.ingestion;
 
+import dev.ahmeddyounis.corpus.ops.RagMetrics;
 import java.io.ByteArrayInputStream;
 import java.util.List;
 import java.util.Locale;
@@ -31,14 +32,16 @@ public class IngestionService {
     private final TokenChunker chunker;
     private final VectorStore vectorStore;
     private final ExecutorService ingestionExecutor;
+    private final RagMetrics metrics;
 
     public IngestionService(DocumentRepository documents, TikaTextExtractor extractor, TokenChunker chunker,
-                            VectorStore vectorStore, ExecutorService ingestionExecutor) {
+                            VectorStore vectorStore, ExecutorService ingestionExecutor, RagMetrics metrics) {
         this.documents = documents;
         this.extractor = extractor;
         this.chunker = chunker;
         this.vectorStore = vectorStore;
         this.ingestionExecutor = ingestionExecutor;
+        this.metrics = metrics;
     }
 
     public static boolean supported(String filename) {
@@ -85,7 +88,9 @@ public class IngestionService {
                                     "chunk_index", chunk.index()))
                             .build())
                     .toList();
+            long embedStart = System.nanoTime();
             vectorStore.add(aiDocuments);
+            metrics.recordPhase("embedding", (System.nanoTime() - embedStart) / 1_000_000);
             documents.save(current.ready(chunks.size()));
             log.info("Ingested document {} ({} chunks)", doc.filename(), chunks.size());
         } catch (Exception e) {
