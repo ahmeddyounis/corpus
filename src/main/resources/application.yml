@@ -1,0 +1,56 @@
+spring:
+  application:
+    name: corpus
+  profiles:
+    # `local` (Ollama, keyless) unless overridden via SPRING_PROFILES_ACTIVE.
+    default: local
+  threads:
+    virtual:
+      enabled: true
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 30MB
+  ai:
+    # Providers are opted into per profile; `none` keeps unused autoconfigurations off.
+    model:
+      chat: none
+      embedding: none
+    vectorstore:
+      pgvector:
+        # Flyway owns all DDL (see db/migration); never let the store create schema.
+        initialize-schema: false
+        index-type: HNSW
+        distance-type: COSINE_DISTANCE
+        dimensions: ${corpus.embedding.dimension}
+    chat:
+      memory:
+        repository:
+          jdbc:
+            initialize-schema: never
+  flyway:
+    placeholders:
+      vector_dimension: ${corpus.embedding.dimension}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+
+corpus:
+  # Environment variable names below are part of the documented contract (README).
+  chunk:
+    size: ${CORPUS_CHUNK_SIZE:512}
+    overlap: ${CORPUS_CHUNK_OVERLAP:64}
+  retrieval:
+    top-k: ${CORPUS_RETRIEVAL_TOP_K:6}
+    rrf-k: ${CORPUS_RRF_K:60}
+    candidate-k: 20
+  rate-limit:
+    rpm: ${CORPUS_RATE_LIMIT_RPM:30}
+  security:
+    jwt:
+      secret: ${CORPUS_JWT_SECRET:corpus-local-dev-secret-0123456789-abcdefghijklmnop}
+  embedding:
+    dimension: 384
