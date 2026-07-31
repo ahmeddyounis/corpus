@@ -1,5 +1,7 @@
 package dev.ahmeddyounis.corpus.chat;
 
+import dev.ahmeddyounis.corpus.ops.CostEstimator;
+import dev.ahmeddyounis.corpus.ops.RagMetrics;
 import dev.ahmeddyounis.corpus.retrieval.RetrievalService;
 import dev.ahmeddyounis.corpus.retrieval.ScoredChunk;
 import java.util.ArrayList;
@@ -16,6 +18,7 @@ import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
@@ -50,6 +53,9 @@ public class ChatService {
     private final ConversationService conversationService;
     private final RagPromptBuilder promptBuilder;
     private final ExecutorService chatExecutor;
+    private final RagMetrics metrics;
+    private final CostEstimator costEstimator;
+    private final String provider;
     private volatile ChatClient chatClient;
 
     public ChatService(ObjectProvider<ChatClient.Builder> chatClientBuilder,
@@ -58,7 +64,10 @@ public class ChatService {
                        RetrievalService retrievalService,
                        ConversationService conversationService,
                        RagPromptBuilder promptBuilder,
-                       @Qualifier("chatExecutor") ExecutorService chatExecutor) {
+                       @Qualifier("chatExecutor") ExecutorService chatExecutor,
+                       RagMetrics metrics,
+                       CostEstimator costEstimator,
+                       @Value("${spring.ai.model.chat:none}") String provider) {
         this.chatClientBuilder = chatClientBuilder;
         this.chatMemory = chatMemory;
         this.documentMetadataTools = documentMetadataTools;
@@ -66,6 +75,9 @@ public class ChatService {
         this.conversationService = conversationService;
         this.promptBuilder = promptBuilder;
         this.chatExecutor = chatExecutor;
+        this.metrics = metrics;
+        this.costEstimator = costEstimator;
+        this.provider = provider;
     }
 
     public SseEmitter stream(UUID userId, UUID conversationId, String message, Integer topK) {
@@ -78,15 +90,24 @@ public class ChatService {
 
     /** Non-streaming variant used by the MCP {@code ask_documents} tool. */
     public SyncAnswer answerSync(UUID userId, String question, Integer topK) {
+        long start = System.nanoTime();
         List<ScoredChunk> chunks = retrievalService.search(userId, question, topK, null);
+        metrics.recordPhase("retrieval", elapsedMs(start));
+        metrics.recordRetrieval(chunks);
         ConversationEntity conversation = conversationService.resolve(userId, null, question);
-        String content = client().prompt()
+        ChatResponse response = client().prompt()
                 .system(RagPromptBuilder.SYSTEM_PROMPT)
                 .user(promptBuilder.userMessage(question, promptBuilder.contextBlock(chunks)))
                 .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversation.id().toString()))
                 .toolContext(Map.of(DocumentMetadataTools.USER_ID_CONTEXT_KEY, userId.toString()))
                 .call()
-                .content();
+                .chatResponse();
+        String content = response != null && response.getResult() != null
+                ? response.getResult().getOutput().getText()
+                : "";
+        recordUsage(response != null ? response.getMetadata() != null ? response.getMetadata().getUsage() : null : null,
+                response != null && response.getMetadata() != null ? response.getMetadata().getModel() : null);
+        metrics.recordPhase("full_response", elapsedMs(start));
         return new SyncAnswer(content, citations(chunks), conversation.id());
     }
 
@@ -96,6 +117,8 @@ public class ChatService {
         try {
             List<ScoredChunk> chunks = retrievalService.search(userId, message, topK, null);
             long retrievalMs = elapsedMs(start);
+            metrics.recordPhase("retrieval", retrievalMs);
+            metrics.recordRetrieval(chunks);
 
             Flux<ChatResponse> stream = client.prompt()
                     .system(RagPromptBuilder.SYSTEM_PROMPT)
@@ -107,6 +130,7 @@ public class ChatService {
 
             long firstTokenMs = -1;
             Usage usage = null;
+            String model = null;
             for (ChatResponse response : stream.toIterable()) {
                 String delta = response.getResult() != null && response.getResult().getOutput() != null
                         ? response.getResult().getOutput().getText()
@@ -114,22 +138,33 @@ public class ChatService {
                 if (delta != null && !delta.isEmpty()) {
                     if (firstTokenMs < 0) {
                         firstTokenMs = elapsedMs(start);
+                        metrics.recordPhase("first_token", firstTokenMs);
                     }
                     emitter.send(SseEmitter.event().name("token").data(Map.of("text", delta)));
                 }
-                Usage candidate = response.getMetadata() != null ? response.getMetadata().getUsage() : null;
-                if (candidate != null && candidate.getTotalTokens() != null && candidate.getTotalTokens() > 0) {
-                    usage = candidate;
+                if (response.getMetadata() != null) {
+                    Usage candidate = response.getMetadata().getUsage();
+                    if (candidate != null && candidate.getTotalTokens() != null && candidate.getTotalTokens() > 0) {
+                        usage = candidate;
+                    }
+                    String candidateModel = response.getMetadata().getModel();
+                    if (candidateModel != null && !candidateModel.isBlank()) {
+                        model = candidateModel;
+                    }
                 }
             }
+
+            long totalMs = elapsedMs(start);
+            metrics.recordPhase("full_response", totalMs);
+            Double cost = recordUsage(usage, model);
 
             emitter.send(SseEmitter.event().name("citations").data(citations(chunks)));
             emitter.send(SseEmitter.event().name("usage").data(new UsageStats(
                     usage != null ? usage.getPromptTokens() : null,
                     usage != null ? usage.getCompletionTokens() : null,
                     usage != null ? usage.getTotalTokens() : null,
-                    null,
-                    retrievalMs, firstTokenMs, elapsedMs(start))));
+                    cost,
+                    retrievalMs, firstTokenMs, totalMs)));
             emitter.send(SseEmitter.event().name("done").data(Map.of(
                     "conversationId", conversation.id().toString())));
             emitter.complete();
@@ -143,6 +178,21 @@ public class ChatService {
             }
             emitter.complete();
         }
+    }
+
+    /** Records token/cost metrics; returns the estimated cost when the model is priced. */
+    private Double recordUsage(Usage usage, String model) {
+        if (usage == null) {
+            return null;
+        }
+        String modelId = CostEstimator.normalize(model);
+        metrics.recordTokens(provider, modelId, usage.getPromptTokens(), usage.getCompletionTokens());
+        return costEstimator.estimate(modelId, usage.getPromptTokens(), usage.getCompletionTokens())
+                .map(cost -> {
+                    metrics.recordCost(provider, modelId, cost);
+                    return cost;
+                })
+                .orElse(null);
     }
 
     private List<Citation> citations(List<ScoredChunk> chunks) {

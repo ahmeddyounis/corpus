@@ -15,6 +15,12 @@ corpus:
     dimension: 384
   mcp:
     anonymous-user: demo
+  pricing:
+    models:
+      # The stub model reports no model id; priced here so cost metrics are assertable.
+      unknown:
+        input-per-mtok: 1.0
+        output-per-mtok: 2.0
   rate-limit:
     rpm: 500
   security:
