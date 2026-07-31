@@ -22,7 +22,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Cache ONNX embedding model
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: .onnx-cache
           key: onnx-all-minilm-l6-v2-${{ runner.os }}
