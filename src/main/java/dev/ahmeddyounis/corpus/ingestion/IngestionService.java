@@ -1,0 +1,116 @@
+package dev.ahmeddyounis.corpus.ingestion;
+
+import java.io.ByteArrayInputStream;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.document.Document;
+import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.ai.vectorstore.filter.Filter;
+import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
+import org.springframework.stereotype.Service;
+
+/**
+ * Upload → (async, virtual thread) parse → chunk → embed+store → status update.
+ * Chunks land in the Spring AI vector store with user/document metadata for scoping.
+ */
+@Service
+public class IngestionService {
+
+    public static final Set<String> SUPPORTED_EXTENSIONS = Set.of("pdf", "md", "markdown", "txt", "docx");
+
+    private static final Logger log = LoggerFactory.getLogger(IngestionService.class);
+
+    private final DocumentRepository documents;
+    private final TikaTextExtractor extractor;
+    private final TokenChunker chunker;
+    private final VectorStore vectorStore;
+    private final ExecutorService ingestionExecutor;
+
+    public IngestionService(DocumentRepository documents, TikaTextExtractor extractor, TokenChunker chunker,
+                            VectorStore vectorStore, ExecutorService ingestionExecutor) {
+        this.documents = documents;
+        this.extractor = extractor;
+        this.chunker = chunker;
+        this.vectorStore = vectorStore;
+        this.ingestionExecutor = ingestionExecutor;
+    }
+
+    public static boolean supported(String filename) {
+        String name = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
+        int dot = name.lastIndexOf('.');
+        return dot >= 0 && SUPPORTED_EXTENSIONS.contains(name.substring(dot + 1));
+    }
+
+    public DocumentEntity upload(UUID userId, String filename, String contentType, byte[] bytes) {
+        DocumentEntity saved = documents.save(DocumentEntity.create(userId, filename, contentType, bytes.length));
+        ingestionExecutor.submit(() -> process(saved, bytes));
+        return saved;
+    }
+
+    public List<DocumentEntity> list(UUID userId) {
+        return documents.findByUserIdOrderByCreatedAtDesc(userId);
+    }
+
+    public boolean delete(UUID userId, UUID documentId) {
+        return documents.findByIdAndUserId(documentId, userId)
+                .map(doc -> {
+                    deleteChunks(userId, documentId);
+                    documents.delete(doc);
+                    return true;
+                })
+                .orElse(false);
+    }
+
+    void process(DocumentEntity doc, byte[] bytes) {
+        DocumentEntity current = documents.save(doc.processing());
+        try {
+            String text = extractor.extract(new ByteArrayInputStream(bytes), doc.filename());
+            List<TokenChunker.Chunk> chunks = chunker.chunk(text);
+            if (chunks.isEmpty()) {
+                throw new IngestionException("Document produced no chunks: " + doc.filename());
+            }
+            List<Document> aiDocuments = chunks.stream()
+                    .map(chunk -> Document.builder()
+                            .text(chunk.text())
+                            .metadata(Map.of(
+                                    "user_id", doc.userId().toString(),
+                                    "document_id", doc.id().toString(),
+                                    "filename", doc.filename(),
+                                    "chunk_index", chunk.index()))
+                            .build())
+                    .toList();
+            vectorStore.add(aiDocuments);
+            documents.save(current.ready(chunks.size()));
+            log.info("Ingested document {} ({} chunks)", doc.filename(), chunks.size());
+        } catch (Exception e) {
+            log.error("Ingestion failed for document {}: {}", doc.id(), e.getMessage());
+            try {
+                deleteChunks(doc.userId(), doc.id());
+            } catch (Exception cleanup) {
+                log.warn("Chunk cleanup after failure also failed for {}: {}", doc.id(), cleanup.getMessage());
+            }
+            documents.save(current.failed(truncate(e.getMessage())));
+        }
+    }
+
+    private void deleteChunks(UUID userId, UUID documentId) {
+        FilterExpressionBuilder b = new FilterExpressionBuilder();
+        Filter.Expression expression = b.and(
+                b.eq("user_id", userId.toString()),
+                b.eq("document_id", documentId.toString())).build();
+        vectorStore.delete(expression);
+    }
+
+    private static String truncate(String message) {
+        if (message == null) {
+            return "Unknown error";
+        }
+        return message.length() <= 1000 ? message : message.substring(0, 1000);
+    }
+}
