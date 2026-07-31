@@ -19,4 +19,10 @@ public class AsyncConfig {
     ExecutorService retrievalExecutor() {
         return Executors.newVirtualThreadPerTaskExecutor();
     }
+
+    /** SSE chat streams block per-request on a virtual thread while iterating model output. */
+    @Bean(destroyMethod = "close")
+    ExecutorService chatExecutor() {
+        return Executors.newVirtualThreadPerTaskExecutor();
+    }
 }
