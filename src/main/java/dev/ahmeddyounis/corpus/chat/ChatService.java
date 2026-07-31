@@ -1,0 +1,184 @@
+package dev.ahmeddyounis.corpus.chat;
+
+import dev.ahmeddyounis.corpus.retrieval.RetrievalService;
+import dev.ahmeddyounis.corpus.retrieval.ScoredChunk;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
+import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.metadata.Usage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import reactor.core.publisher.Flux;
+
+/**
+ * RAG chat: hybrid retrieval feeds numbered context into the prompt, the model
+ * response streams back as SSE (token* → citations → usage → done), and
+ * conversation memory persists via the JDBC chat-memory repository.
+ *
+ * <p>The ChatClient is assembled lazily from the auto-configured builder so that
+ * keyless profiles (no chat model) start fine and fail per-request with a clear 503.
+ */
+@Service
+public class ChatService {
+
+    public record UsageStats(Integer promptTokens, Integer completionTokens, Integer totalTokens,
+                             Double estimatedCostUsd, long retrievalMs, long firstTokenMs, long totalMs) {
+    }
+
+    public record SyncAnswer(String answer, List<Citation> citations, UUID conversationId) {
+    }
+
+    private static final Logger log = LoggerFactory.getLogger(ChatService.class);
+    private static final long SSE_TIMEOUT_MS = 300_000L;
+
+    private final ObjectProvider<ChatClient.Builder> chatClientBuilder;
+    private final ChatMemory chatMemory;
+    private final DocumentMetadataTools documentMetadataTools;
+    private final RetrievalService retrievalService;
+    private final ConversationService conversationService;
+    private final RagPromptBuilder promptBuilder;
+    private final ExecutorService chatExecutor;
+    private volatile ChatClient chatClient;
+
+    public ChatService(ObjectProvider<ChatClient.Builder> chatClientBuilder,
+                       ChatMemory chatMemory,
+                       DocumentMetadataTools documentMetadataTools,
+                       RetrievalService retrievalService,
+                       ConversationService conversationService,
+                       RagPromptBuilder promptBuilder,
+                       @Qualifier("chatExecutor") ExecutorService chatExecutor) {
+        this.chatClientBuilder = chatClientBuilder;
+        this.chatMemory = chatMemory;
+        this.documentMetadataTools = documentMetadataTools;
+        this.retrievalService = retrievalService;
+        this.conversationService = conversationService;
+        this.promptBuilder = promptBuilder;
+        this.chatExecutor = chatExecutor;
+    }
+
+    public SseEmitter stream(UUID userId, UUID conversationId, String message, Integer topK) {
+        ConversationEntity conversation = conversationService.resolve(userId, conversationId, message);
+        ChatClient client = client();
+        SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
+        chatExecutor.submit(() -> run(client, userId, conversation, message, topK, emitter));
+        return emitter;
+    }
+
+    /** Non-streaming variant used by the MCP {@code ask_documents} tool. */
+    public SyncAnswer answerSync(UUID userId, String question, Integer topK) {
+        List<ScoredChunk> chunks = retrievalService.search(userId, question, topK, null);
+        ConversationEntity conversation = conversationService.resolve(userId, null, question);
+        String content = client().prompt()
+                .system(RagPromptBuilder.SYSTEM_PROMPT)
+                .user(promptBuilder.userMessage(question, promptBuilder.contextBlock(chunks)))
+                .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversation.id().toString()))
+                .toolContext(Map.of(DocumentMetadataTools.USER_ID_CONTEXT_KEY, userId.toString()))
+                .call()
+                .content();
+        return new SyncAnswer(content, citations(chunks), conversation.id());
+    }
+
+    private void run(ChatClient client, UUID userId, ConversationEntity conversation, String message,
+                     Integer topK, SseEmitter emitter) {
+        long start = System.nanoTime();
+        try {
+            List<ScoredChunk> chunks = retrievalService.search(userId, message, topK, null);
+            long retrievalMs = elapsedMs(start);
+
+            Flux<ChatResponse> stream = client.prompt()
+                    .system(RagPromptBuilder.SYSTEM_PROMPT)
+                    .user(promptBuilder.userMessage(message, promptBuilder.contextBlock(chunks)))
+                    .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversation.id().toString()))
+                    .toolContext(Map.of(DocumentMetadataTools.USER_ID_CONTEXT_KEY, userId.toString()))
+                    .stream()
+                    .chatResponse();
+
+            long firstTokenMs = -1;
+            Usage usage = null;
+            for (ChatResponse response : stream.toIterable()) {
+                String delta = response.getResult() != null && response.getResult().getOutput() != null
+                        ? response.getResult().getOutput().getText()
+                        : null;
+                if (delta != null && !delta.isEmpty()) {
+                    if (firstTokenMs < 0) {
+                        firstTokenMs = elapsedMs(start);
+                    }
+                    emitter.send(SseEmitter.event().name("token").data(Map.of("text", delta)));
+                }
+                Usage candidate = response.getMetadata() != null ? response.getMetadata().getUsage() : null;
+                if (candidate != null && candidate.getTotalTokens() != null && candidate.getTotalTokens() > 0) {
+                    usage = candidate;
+                }
+            }
+
+            emitter.send(SseEmitter.event().name("citations").data(citations(chunks)));
+            emitter.send(SseEmitter.event().name("usage").data(new UsageStats(
+                    usage != null ? usage.getPromptTokens() : null,
+                    usage != null ? usage.getCompletionTokens() : null,
+                    usage != null ? usage.getTotalTokens() : null,
+                    null,
+                    retrievalMs, firstTokenMs, elapsedMs(start))));
+            emitter.send(SseEmitter.event().name("done").data(Map.of(
+                    "conversationId", conversation.id().toString())));
+            emitter.complete();
+        } catch (Exception e) {
+            log.error("Chat stream failed for conversation {}: {}", conversation.id(), e.getMessage());
+            try {
+                emitter.send(SseEmitter.event().name("error").data(Map.of(
+                        "message", e.getMessage() == null ? "Chat failed" : e.getMessage())));
+            } catch (Exception ignored) {
+                // Client already gone.
+            }
+            emitter.complete();
+        }
+    }
+
+    private List<Citation> citations(List<ScoredChunk> chunks) {
+        List<Citation> citations = new ArrayList<>(chunks.size());
+        for (int i = 0; i < chunks.size(); i++) {
+            ScoredChunk chunk = chunks.get(i);
+            citations.add(new Citation(i + 1, chunk.chunkId(), chunk.documentId(), chunk.filename(),
+                    chunk.chunkIndex(), chunk.rrfScore()));
+        }
+        return citations;
+    }
+
+    private ChatClient client() {
+        ChatClient local = chatClient;
+        if (local != null) {
+            return local;
+        }
+        synchronized (this) {
+            if (chatClient == null) {
+                ChatClient.Builder builder = chatClientBuilder.getIfAvailable();
+                if (builder == null) {
+                    throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                            "No chat model configured. Activate the 'local' profile (Ollama) or the "
+                                    + "'cloud' profile with an API key; the keyless profile serves "
+                                    + "ingestion and search only.");
+                }
+                chatClient = builder
+                        .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build())
+                        .defaultTools(documentMetadataTools)
+                        .build();
+            }
+            return chatClient;
+        }
+    }
+
+    private static long elapsedMs(long startNanos) {
+        return (System.nanoTime() - startNanos) / 1_000_000;
+    }
+}

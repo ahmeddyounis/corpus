@@ -10,4 +10,6 @@ public interface DocumentRepository extends CrudRepository<DocumentEntity, UUID>
     List<DocumentEntity> findByUserIdOrderByCreatedAtDesc(UUID userId);
 
     Optional<DocumentEntity> findByIdAndUserId(UUID id, UUID userId);
+
+    Optional<DocumentEntity> findByUserIdAndFilename(UUID userId, String filename);
 }
