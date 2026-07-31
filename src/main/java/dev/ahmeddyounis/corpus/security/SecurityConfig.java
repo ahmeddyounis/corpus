@@ -62,6 +62,14 @@ public class SecurityConfig {
     }
 
     private static SecretKeySpec secretKey(CorpusSecurityProperties properties) {
-        return new SecretKeySpec(properties.jwt().secret().getBytes(StandardCharsets.UTF_8), "HmacSHA256");
+        byte[] secret = properties.jwt().secret().getBytes(StandardCharsets.UTF_8);
+        if (secret.length < 32) {
+            // HS256 requires >= 256-bit keys; failing here beats a per-request
+            // KeyLengthException 500 the first time a token is issued.
+            throw new IllegalStateException(
+                    "corpus.security.jwt.secret must be at least 32 bytes (got " + secret.length
+                            + "). Set CORPUS_JWT_SECRET to a random string of 32+ characters.");
+        }
+        return new SecretKeySpec(secret, "HmacSHA256");
     }
 }

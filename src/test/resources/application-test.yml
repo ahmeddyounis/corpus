@@ -23,6 +23,9 @@ corpus:
         output-per-mtok: 2.0
   rate-limit:
     rpm: 500
+    # Integration tests mint many tokens from one IP; the dedicated rate-limit
+    # test lowers this via @TestPropertySource.
+    token-rpm: 10000
   security:
     jwt:
       secret: corpus-test-secret-0123456789-abcdefghijklmnopqrstuvwxyz

@@ -208,6 +208,7 @@ curl -N -X POST localhost:8080/api/chat \
 | `CORPUS_RRF_K` | `60` | Reciprocal Rank Fusion constant |
 | `CORPUS_JWT_SECRET` | dev value | HMAC secret for JWT (≥32 bytes; override outside dev) |
 | `CORPUS_RATE_LIMIT_RPM` | `30` | Per-user requests/minute |
+| `CORPUS_TOKEN_RATE_LIMIT_RPM` | `10` | Per-IP attempts/minute on `/api/auth/token` |
 
 ### Embedding dimension matrix
 
