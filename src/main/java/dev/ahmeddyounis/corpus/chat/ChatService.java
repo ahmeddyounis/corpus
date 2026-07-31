@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.beans.BeansException;
@@ -106,8 +107,9 @@ public class ChatService {
         String content = response != null && response.getResult() != null
                 ? response.getResult().getOutput().getText()
                 : "";
-        recordUsage(response != null ? response.getMetadata() != null ? response.getMetadata().getUsage() : null : null,
-                response != null && response.getMetadata() != null ? response.getMetadata().getModel() : null);
+        ChatResponseMetadata metadata = response != null ? response.getMetadata() : null;
+        recordUsage(metadata != null ? metadata.getUsage() : null,
+                metadata != null ? metadata.getModel() : null);
         metrics.recordPhase("full_response", elapsedMs(start));
         return new SyncAnswer(content, citations(chunks), conversation.id());
     }
