@@ -28,3 +28,9 @@ spring:
 corpus:
   embedding:
     dimension: ${CORPUS_EMBEDDING_DIMENSION:384}
+  security:
+    jwt:
+      # No fallback in cloud: startup fails with an actionable message unless
+      # CORPUS_JWT_SECRET is set to a private value (SecurityConfig also rejects
+      # the published dev default outright under this profile).
+      secret: ${CORPUS_JWT_SECRET:}

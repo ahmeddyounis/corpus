@@ -42,4 +42,24 @@ class RateLimitIntegrationTest extends AbstractIntegrationTest {
             assertThat(limited.body()).contains("rate_limit_exceeded");
         }
     }
+
+    @Test
+    void anonymousMcpCallsAreRateLimitedPerIp() throws Exception {
+        try (HttpClient http = HttpClient.newHttpClient()) {
+            HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/mcp"))
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json, text/event-stream")
+                    .POST(HttpRequest.BodyPublishers.ofString(
+                            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"))
+                    .build();
+
+            for (int i = 0; i < 3; i++) {
+                HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
+                assertThat(response.statusCode()).as("mcp call %d within budget", i).isNotEqualTo(429);
+            }
+
+            HttpResponse<String> limited = http.send(request, HttpResponse.BodyHandlers.ofString());
+            assertThat(limited.statusCode()).isEqualTo(429);
+        }
+    }
 }
