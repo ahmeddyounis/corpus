@@ -24,8 +24,8 @@ import org.springframework.security.web.SecurityFilterChain;
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http, CorpusRateLimitProperties rateLimitProperties)
-            throws Exception {
+    SecurityFilterChain securityFilterChain(HttpSecurity http, CorpusRateLimitProperties rateLimitProperties,
+                                            RateLimitBuckets rateLimitBuckets) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -42,7 +42,8 @@ public class SecurityConfig {
                         .requestMatchers("/mcp", "/mcp/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
-                .addFilterAfter(new RateLimitFilter(rateLimitProperties), BearerTokenAuthenticationFilter.class);
+                .addFilterAfter(new RateLimitFilter(rateLimitProperties, rateLimitBuckets),
+                        BearerTokenAuthenticationFilter.class);
         return http.build();
     }
 

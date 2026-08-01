@@ -32,6 +32,9 @@ spring:
           directory: ${CORPUS_ONNX_CACHE:${user.home}/.cache/corpus-onnx}
 
 corpus:
+  rate-limit:
+    # Multiple replicas share one budget per user.
+    backend: ${CORPUS_RATE_LIMIT_BACKEND:postgres}
   embedding:
     dimension: ${CORPUS_EMBEDDING_DIMENSION:384}
   security:

@@ -37,6 +37,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-security")
     implementation("org.springframework.boot:spring-boot-starter-oauth2-resource-server")
     implementation("com.bucket4j:bucket4j_jdk17-core:8.19.0")
+    implementation("com.bucket4j:bucket4j_jdk17-postgresql:8.19.0")
 
     // Spring AI: models (selected per profile via spring.ai.model.*), vector store, memory, MCP
     implementation("org.springframework.ai:spring-ai-starter-model-anthropic")

@@ -79,6 +79,9 @@ corpus:
   rate-limit:
     rpm: ${CORPUS_RATE_LIMIT_RPM:30}
     token-rpm: ${CORPUS_TOKEN_RATE_LIMIT_RPM:10}
+    # memory = per instance (N replicas give each user N x the budget);
+    # postgres = fleet-wide. Deployed profiles override this.
+    backend: ${CORPUS_RATE_LIMIT_BACKEND:memory}
   security:
     jwt:
       secret: ${CORPUS_JWT_SECRET:corpus-local-dev-secret-0123456789-abcdefghijklmnop}
