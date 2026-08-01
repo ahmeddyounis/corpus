@@ -1,6 +1,13 @@
 spring:
   application:
     name: corpus
+  http:
+    clients:
+      # Plural form: spring.http.client.* is deprecated in Boot 4 and silently ignored.
+      # Governs the RestClient-based providers (Ollama); the Anthropic/OpenAI SDKs
+      # have their own timeouts, set in application-cloud.yml.
+      connect-timeout: 5s
+      read-timeout: 60s
   lifecycle:
     # Must exceed the executor termination timeouts (corpus.async.*) and stay under
     # the platform kill timeout: Helm terminationGracePeriodSeconds / Fly kill_timeout.
@@ -38,6 +45,16 @@ spring:
         repository:
           jdbc:
             initialize-schema: never
+    retry:
+      # Default is 10 attempts with 2s x5 backoff, which stacks on top of the SDKs'
+      # own retries: a worst case measured in hours. Two attempts is enough to ride
+      # out a blip without hiding a real outage from the circuit breaker.
+      max-attempts: 2
+      on-client-errors: false
+      backoff:
+        initial-interval: 500ms
+        multiplier: 2
+        max-interval: 3s
     mcp:
       server:
         name: corpus
@@ -45,6 +62,25 @@ spring:
         # The autoconfiguration gate requires this to be explicit (matchIfMissing=false);
         # without it the legacy SSE transport wins.
         protocol: STREAMABLE
+  datasource:
+    hikari:
+      pool-name: corpus-pool
+      # Retrieval issues two concurrent queries per request and ingestion holds one
+      # per document (capped at corpus.async.ingestion-concurrency). Deployment
+      # constraint: replicas x maximum-pool-size must fit the server's connection cap.
+      maximum-pool-size: ${CORPUS_DB_POOL_SIZE:10}
+      minimum-idle: 2
+      # HikariDataSource binds raw milliseconds, not Spring Duration strings.
+      connection-timeout: 3000
+      validation-timeout: 2000
+      idle-timeout: 300000
+      max-lifetime: 1500000
+      keepalive-time: 120000
+      leak-detection-threshold: 20000
+      data-source-properties:
+        # Bounds a runaway HNSW scan or pathological tsquery instead of letting it
+        # hold a connection indefinitely.
+        options: "-c statement_timeout=15000 -c idle_in_transaction_session_timeout=30000"
   flyway:
     placeholders:
       vector_dimension: ${corpus.embedding.dimension}
@@ -57,6 +93,28 @@ management:
     web:
       exposure:
         include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      # Never leak component details (datasource URLs, provider names) to anonymous
+      # callers: /actuator/health is permitAll so load balancers can reach it.
+      # show-components deliberately left to follow show-details: an anonymous
+      # caller on this permitAll endpoint sees only the overall status, never the
+      # component inventory.
+      show-details: when-authorized
+      cache:
+        time-to-live: 2s
+      group:
+        # Readiness gates traffic: the database is required to serve anything.
+        # The chat breaker is deliberately absent — see ChatModelHealthIndicator.
+        readiness:
+          include: readinessState,db
+        liveness:
+          include: livenessState
+  health:
+    diskspace:
+      enabled: false
 
 corpus:
   # Environment variable names below are part of the documented contract (README).
@@ -82,6 +140,13 @@ corpus:
     # memory = per instance (N replicas give each user N x the budget);
     # postgres = fleet-wide. Deployed profiles override this.
     backend: ${CORPUS_RATE_LIMIT_BACKEND:memory}
+  resilience:
+    enabled: ${CORPUS_RESILIENCE_ENABLED:true}
+    sliding-window-size: 20
+    minimum-number-of-calls: 5
+    failure-rate-threshold: 50
+    slow-call-duration-threshold: 120s
+    wait-duration-in-open-state: 30s
   security:
     jwt:
       secret: ${CORPUS_JWT_SECRET:corpus-local-dev-secret-0123456789-abcdefghijklmnop}
