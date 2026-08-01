@@ -18,10 +18,17 @@ spring:
       embedding: ${CORPUS_EMBEDDING_PROVIDER:transformers}
     anthropic:
       api-key: ${ANTHROPIC_API_KEY:}
+      # The SDK's own default is 10 minutes. Worst case is now
+      # timeout x (1 + sdk retries) x (1 + spring-ai retries) = 90s x 3 x 2 = 540s,
+      # and the circuit breaker's slow-call threshold cuts in well before that.
+      timeout: 90s
+      max-retries: 2
       chat:
         model: ${CORPUS_CHAT_MODEL:claude-sonnet-4-5}
     openai:
       api-key: ${OPENAI_API_KEY:}
+      timeout: 90s
+      max-retries: 2
       chat:
         model: ${CORPUS_CHAT_MODEL:gpt-4o-mini}
       embedding:

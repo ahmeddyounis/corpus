@@ -1,6 +1,7 @@
 package dev.ahmeddyounis.corpus.chat;
 
 import dev.ahmeddyounis.corpus.ops.CostEstimator;
+import dev.ahmeddyounis.corpus.ops.ModelResilience;
 import dev.ahmeddyounis.corpus.ops.RagMetrics;
 import dev.ahmeddyounis.corpus.retrieval.RetrievalService;
 import dev.ahmeddyounis.corpus.retrieval.ScoredChunk;
@@ -59,6 +60,7 @@ public class ChatService {
     private final AsyncTaskExecutor chatExecutor;
     private final RagMetrics metrics;
     private final CostEstimator costEstimator;
+    private final ModelResilience resilience;
     private final String provider;
     private volatile ChatClient chatClient;
 
@@ -71,6 +73,7 @@ public class ChatService {
                        @Qualifier("chatExecutor") AsyncTaskExecutor chatExecutor,
                        RagMetrics metrics,
                        CostEstimator costEstimator,
+                       ModelResilience resilience,
                        @Value("${spring.ai.model.chat:none}") String provider) {
         this.chatClientBuilder = chatClientBuilder;
         this.chatMemory = chatMemory;
@@ -81,6 +84,7 @@ public class ChatService {
         this.chatExecutor = chatExecutor;
         this.metrics = metrics;
         this.costEstimator = costEstimator;
+        this.resilience = resilience;
         this.provider = provider;
     }
 
@@ -99,13 +103,13 @@ public class ChatService {
         metrics.recordPhase("retrieval", elapsedMs(start));
         metrics.recordRetrieval(chunks);
         ConversationEntity conversation = conversationService.resolve(userId, null, question);
-        ChatResponse response = client().prompt()
+        ChatResponse response = resilience.callChat(() -> client().prompt()
                 .system(RagPromptBuilder.SYSTEM_PROMPT)
                 .user(promptBuilder.userMessage(question, promptBuilder.contextBlock(chunks)))
                 .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversation.id().toString()))
                 .toolContext(Map.of(DocumentMetadataTools.USER_ID_CONTEXT_KEY, userId.toString()))
                 .call()
-                .chatResponse();
+                .chatResponse());
         String content = response != null && response.getResult() != null
                 ? response.getResult().getOutput().getText()
                 : "";
@@ -128,13 +132,13 @@ public class ChatService {
             metrics.recordPhase("retrieval", retrievalMs);
             metrics.recordRetrieval(chunks);
 
-            Flux<ChatResponse> stream = client.prompt()
+            Flux<ChatResponse> stream = resilience.streamChat(client.prompt()
                     .system(RagPromptBuilder.SYSTEM_PROMPT)
                     .user(promptBuilder.userMessage(message, promptBuilder.contextBlock(chunks)))
                     .advisors(a -> a.param(ChatMemory.CONVERSATION_ID, conversation.id().toString()))
                     .toolContext(Map.of(DocumentMetadataTools.USER_ID_CONTEXT_KEY, userId.toString()))
                     .stream()
-                    .chatResponse();
+                    .chatResponse());
 
             long firstTokenMs = -1;
             int promptTokens = 0;

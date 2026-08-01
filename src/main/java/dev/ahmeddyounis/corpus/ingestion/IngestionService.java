@@ -1,6 +1,7 @@
 package dev.ahmeddyounis.corpus.ingestion;
 
 import dev.ahmeddyounis.corpus.ops.InstanceIdentity;
+import dev.ahmeddyounis.corpus.ops.ModelResilience;
 import dev.ahmeddyounis.corpus.ops.RagMetrics;
 import java.io.ByteArrayInputStream;
 import java.util.List;
@@ -40,11 +41,12 @@ public class IngestionService {
     private final AsyncTaskExecutor ingestionExecutor;
     private final RagMetrics metrics;
     private final InstanceIdentity instance;
+    private final ModelResilience resilience;
 
     public IngestionService(DocumentRepository documents, DocumentLifecycleDao lifecycle,
                             TikaTextExtractor extractor, TokenChunker chunker, VectorStore vectorStore,
                             ChunkStore chunkStore, AsyncTaskExecutor ingestionExecutor, RagMetrics metrics,
-                            InstanceIdentity instance) {
+                            InstanceIdentity instance, ModelResilience resilience) {
         this.documents = documents;
         this.lifecycle = lifecycle;
         this.extractor = extractor;
@@ -54,6 +56,7 @@ public class IngestionService {
         this.ingestionExecutor = ingestionExecutor;
         this.metrics = metrics;
         this.instance = instance;
+        this.resilience = resilience;
     }
 
     public static boolean supported(String filename) {
@@ -123,7 +126,7 @@ public class IngestionService {
                             .build())
                     .toList();
             long embedStart = System.nanoTime();
-            vectorStore.add(aiDocuments);
+            resilience.runEmbedding(() -> vectorStore.add(aiDocuments));
             metrics.recordPhase("embedding", (System.nanoTime() - embedStart) / 1_000_000);
 
             if (!lifecycle.markReady(doc.id(), chunks.size(), instanceId)) {

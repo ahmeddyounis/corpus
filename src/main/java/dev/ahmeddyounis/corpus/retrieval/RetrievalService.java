@@ -1,5 +1,6 @@
 package dev.ahmeddyounis.corpus.retrieval;
 
+import dev.ahmeddyounis.corpus.ops.ModelResilience;
 import dev.ahmeddyounis.corpus.retrieval.FullTextSearchDao.FtsHit;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -29,15 +30,18 @@ public class RetrievalService {
     private final RrfFuser fuser;
     private final CorpusRetrievalProperties properties;
     private final AsyncTaskExecutor retrievalExecutor;
+    private final ModelResilience resilience;
 
     public RetrievalService(VectorStore vectorStore, FullTextSearchDao fullTextSearch, RrfFuser fuser,
                             CorpusRetrievalProperties properties,
-                            @Qualifier("retrievalExecutor") AsyncTaskExecutor retrievalExecutor) {
+                            @Qualifier("retrievalExecutor") AsyncTaskExecutor retrievalExecutor,
+                            ModelResilience resilience) {
         this.vectorStore = vectorStore;
         this.fullTextSearch = fullTextSearch;
         this.fuser = fuser;
         this.properties = properties;
         this.retrievalExecutor = retrievalExecutor;
+        this.resilience = resilience;
     }
 
     public List<ScoredChunk> search(UUID userId, String query, Integer topKOverride, List<UUID> documentIds) {
@@ -108,10 +112,10 @@ public class RetrievalService {
                 : b.and(userScope, b.in("document_id",
                         documentIds.stream().map(UUID::toString).map(Object.class::cast).toList())).build();
 
-        return vectorStore.similaritySearch(SearchRequest.builder()
+        return resilience.callEmbedding(() -> vectorStore.similaritySearch(SearchRequest.builder()
                 .query(query)
                 .topK(candidateK)
                 .filterExpression(filter)
-                .build());
+                .build()));
     }
 }
