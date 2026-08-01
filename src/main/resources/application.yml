@@ -93,6 +93,10 @@ spring:
 server:
   shutdown: graceful
 
+springdoc:
+  swagger-ui:
+    persist-authorization: true
+
 management:
   endpoints:
     web:
@@ -155,6 +159,9 @@ corpus:
     slow-call-duration-threshold: 120s
     wait-duration-in-open-state: 30s
   security:
+    cors:
+      # Empty disables CORS; the hosted demo sets its own origin.
+      allowed-origins: ${CORPUS_CORS_ALLOWED_ORIGINS:}
     jwt:
       secret: ${CORPUS_JWT_SECRET:corpus-local-dev-secret-0123456789-abcdefghijklmnop}
       ttl: 24h
