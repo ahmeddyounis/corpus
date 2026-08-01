@@ -45,12 +45,6 @@ public class AsyncConfig {
         return base("corpus-chat-", properties.chatTermination(), taskDecorator);
     }
 
-    /** Identity decorator; replaced by MDC propagation when structured logging lands. */
-    @Bean
-    TaskDecorator taskDecorator() {
-        return runnable -> runnable;
-    }
-
     private static SimpleAsyncTaskExecutor base(String threadPrefix, java.time.Duration termination,
                                                 TaskDecorator taskDecorator) {
         SimpleAsyncTaskExecutor executor = new SimpleAsyncTaskExecutor(threadPrefix);

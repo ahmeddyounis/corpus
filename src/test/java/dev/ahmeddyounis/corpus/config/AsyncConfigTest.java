@@ -5,6 +5,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
+import dev.ahmeddyounis.corpus.ops.MdcTaskDecorator;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
 import org.springframework.core.task.TaskRejectedException;
 
@@ -24,7 +25,7 @@ class AsyncConfigTest {
     @Test
     void closeReturnsWithinTheTerminationBudgetEvenWithWorkInFlight() throws Exception {
         AsyncConfig config = new AsyncConfig(properties);
-        SimpleAsyncTaskExecutor executor = config.ingestionExecutor(config.taskDecorator());
+        SimpleAsyncTaskExecutor executor = config.ingestionExecutor(new MdcTaskDecorator());
         CountDownLatch started = new CountDownLatch(1);
         AtomicBoolean interrupted = new AtomicBoolean();
 
@@ -55,7 +56,7 @@ class AsyncConfigTest {
         CountDownLatch release = new CountDownLatch(1);
         CountDownLatch started = new CountDownLatch(1);
 
-        try (SimpleAsyncTaskExecutor executor = config.ingestionExecutor(config.taskDecorator())) {
+        try (SimpleAsyncTaskExecutor executor = config.ingestionExecutor(new MdcTaskDecorator())) {
             executor.submit(() -> {
                 started.countDown();
                 try {

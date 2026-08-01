@@ -40,3 +40,15 @@ server:
     remoteip:
       remote-ip-header: ${CORPUS_REMOTE_IP_HEADER:x-forwarded-for}
       protocol-header: x-forwarded-proto
+
+logging:
+  structured:
+    format:
+      # Boot's built-in ECS encoder: no logback XML, nothing to drift on upgrade.
+      console: ecs
+    json:
+      context:
+        # Puts requestId/clientIp (and trace ids once tracing is on) in the payload.
+        include: true
+  level:
+    dev.ahmeddyounis.corpus: INFO
