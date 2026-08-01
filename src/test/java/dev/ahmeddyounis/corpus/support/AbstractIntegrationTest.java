@@ -75,12 +75,15 @@ public abstract class AbstractIntegrationTest {
                 });
     }
 
+    /** Unwraps the pagination envelope so callers keep working with a plain list. */
+    @SuppressWarnings("unchecked")
     protected List<Map<String, Object>> listDocuments(String token) {
-        return restClient().get().uri("/api/documents")
+        Map<String, Object> page = restClient().get().uri("/api/documents?size=100")
                 .header("Authorization", "Bearer " + token)
                 .retrieve()
                 .body(new ParameterizedTypeReference<>() {
                 });
+        return (List<Map<String, Object>>) page.get("items");
     }
 
     /** Uploads and blocks until ingestion reaches READY; returns the document id. */

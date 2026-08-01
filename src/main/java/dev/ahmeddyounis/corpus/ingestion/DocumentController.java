@@ -1,5 +1,6 @@
 package dev.ahmeddyounis.corpus.ingestion;
 
+import dev.ahmeddyounis.corpus.api.PageResponse;
 import dev.ahmeddyounis.corpus.security.CurrentUser;
 import io.swagger.v3.oas.annotations.Operation;
 import java.io.IOException;
@@ -7,6 +8,9 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -67,10 +71,12 @@ public class DocumentController {
         }
     }
 
-    @Operation(summary = "List the caller's documents with ingestion status")
+    @Operation(summary = "List the caller's documents with ingestion status (paginated, newest first)")
     @GetMapping
-    public List<DocumentResponse> list() {
-        return ingestionService.list(currentUser.id()).stream().map(DocumentResponse::from).toList();
+    public PageResponse<DocumentResponse> list(
+            @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC)
+            Pageable pageable) {
+        return PageResponse.of(ingestionService.list(currentUser.id(), pageable), DocumentResponse::from);
     }
 
     @Operation(summary = "Delete a document and its chunks/embeddings")

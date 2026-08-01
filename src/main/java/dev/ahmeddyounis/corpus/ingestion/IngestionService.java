@@ -92,6 +92,11 @@ public class IngestionService {
         return documents.findByUserIdOrderByCreatedAtDesc(userId);
     }
 
+    public org.springframework.data.domain.Page<DocumentEntity> list(
+            UUID userId, org.springframework.data.domain.Pageable pageable) {
+        return documents.findByUserId(userId, pageable);
+    }
+
     public boolean delete(UUID userId, UUID documentId) {
         return documents.findByIdAndUserId(documentId, userId)
                 .map(doc -> {
