@@ -1,6 +1,7 @@
 package dev.ahmeddyounis.corpus.chat;
 
 import dev.ahmeddyounis.corpus.ingestion.DocumentEntity;
+import dev.ahmeddyounis.corpus.ingestion.DocumentLifecycleDao;
 import dev.ahmeddyounis.corpus.ingestion.DocumentRepository;
 import dev.ahmeddyounis.corpus.security.UserAccount;
 import dev.ahmeddyounis.corpus.security.UserRepository;
@@ -20,6 +21,8 @@ class DocumentMetadataToolsIntegrationTest extends AbstractIntegrationTest {
     @Autowired
     private DocumentRepository documents;
     @Autowired
+    private DocumentLifecycleDao lifecycle;
+    @Autowired
     private UserRepository users;
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -32,7 +35,10 @@ class DocumentMetadataToolsIntegrationTest extends AbstractIntegrationTest {
                 .orElseGet(() -> users.save(UserAccount.create("tool-stranger", passwordEncoder.encode("x"))));
 
         if (documents.findByUserIdAndFilename(owner.id(), "tool-doc.md").isEmpty()) {
-            documents.save(DocumentEntity.create(owner.id(), "tool-doc.md", "text/markdown", 123).ready(4));
+            DocumentEntity pending = documents.save(
+                    DocumentEntity.create(owner.id(), "tool-doc.md", "text/markdown", 123, "test-instance"));
+            lifecycle.claim(pending.id(), "test-instance");
+            lifecycle.markReady(pending.id(), 4, "test-instance");
         }
 
         String forOwner = tools.documentInfo("tool-doc.md",

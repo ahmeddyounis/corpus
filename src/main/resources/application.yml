@@ -56,6 +56,10 @@ corpus:
   chunk:
     size: ${CORPUS_CHUNK_SIZE:512}
     overlap: ${CORPUS_CHUNK_OVERLAP:64}
+  ingestion:
+    # Must exceed the slowest legitimate ingestion: below this, a live instance's
+    # in-flight work could be swept out from under it by another instance.
+    stale-after: ${CORPUS_INGESTION_STALE_AFTER:15m}
   retrieval:
     top-k: ${CORPUS_RETRIEVAL_TOP_K:6}
     rrf-k: ${CORPUS_RRF_K:60}

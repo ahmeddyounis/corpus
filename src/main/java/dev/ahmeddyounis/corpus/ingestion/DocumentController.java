@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -55,8 +56,13 @@ public class DocumentController {
             throw new ResponseStatusException(HttpStatus.UNSUPPORTED_MEDIA_TYPE,
                     "Supported extensions: " + IngestionService.SUPPORTED_EXTENSIONS);
         }
-        return DocumentResponse.from(
-                ingestionService.upload(currentUser.id(), filename, file.getContentType(), file.getBytes()));
+        try {
+            return DocumentResponse.from(
+                    ingestionService.upload(currentUser.id(), filename, file.getContentType(), file.getBytes()));
+        } catch (DataIntegrityViolationException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "A document named '" + filename + "' already exists; delete it first.");
+        }
     }
 
     @Operation(summary = "List the caller's documents with ingestion status")
