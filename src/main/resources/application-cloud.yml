@@ -34,3 +34,14 @@ corpus:
       # CORPUS_JWT_SECRET is set to a private value (SecurityConfig also rejects
       # the published dev default outright under this profile).
       secret: ${CORPUS_JWT_SECRET:}
+
+server:
+  # Behind a proxy (Fly, Render, a k8s ingress) getRemoteAddr() returns the
+  # proxy's address, which would collapse every anonymous caller into one
+  # rate-limit bucket. RemoteIpValve rewrites it from the forwarded header, and
+  # only when the immediate peer is a trusted proxy, so a client cannot forge it.
+  forward-headers-strategy: NATIVE
+  tomcat:
+    remoteip:
+      remote-ip-header: ${CORPUS_REMOTE_IP_HEADER:x-forwarded-for}
+      protocol-header: x-forwarded-proto
