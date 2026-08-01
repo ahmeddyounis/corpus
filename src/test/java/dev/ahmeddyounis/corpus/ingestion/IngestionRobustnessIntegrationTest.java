@@ -21,6 +21,8 @@ class IngestionRobustnessIntegrationTest extends AbstractIntegrationTest {
     @Autowired
     private StaleIngestionSweeper sweeper;
     @Autowired
+    private IngestionShutdownSweeper shutdownSweeper;
+    @Autowired
     private DocumentLifecycleDao lifecycle;
     @Autowired
     private DocumentRepository documents;
@@ -163,6 +165,20 @@ class IngestionRobustnessIntegrationTest extends AbstractIntegrationTest {
 
         assertThat(chunkCount(doc.id())).isZero();
         assertThat(documents.findById(doc.id())).isEmpty();
+    }
+
+    @Test
+    void shutdownSweepFailsOnlyThisInstancesLeftovers() {
+        UUID userId = user("shutdown-sweep");
+        UUID mine = inFlight(userId, "mine-at-shutdown.md", DocumentStatus.PROCESSING,
+                instance.id(), Instant.now());
+        UUID theirs = inFlight(userId, "theirs-at-shutdown.md", DocumentStatus.PROCESSING,
+                "another-live-pod", Instant.now());
+
+        shutdownSweeper.stop();
+
+        assertThat(documents.findById(mine).orElseThrow().status()).isEqualTo(DocumentStatus.FAILED);
+        assertThat(documents.findById(theirs).orElseThrow().status()).isEqualTo(DocumentStatus.PROCESSING);
     }
 
     @Test

@@ -11,6 +11,9 @@ spring:
           directory: ${user.dir}/.onnx-cache
 
 corpus:
+  async:
+    # The suite uploads several documents at once; don't let the bulkhead serialize it.
+    ingestion-concurrency: 16
   embedding:
     dimension: 384
   mcp:

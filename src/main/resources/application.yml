@@ -1,6 +1,10 @@
 spring:
   application:
     name: corpus
+  lifecycle:
+    # Must exceed the executor termination timeouts (corpus.async.*) and stay under
+    # the platform kill timeout: Helm terminationGracePeriodSeconds / Fly kill_timeout.
+    timeout-per-shutdown-phase: 45s
   profiles:
     # `local` (Ollama, keyless) unless overridden via SPRING_PROFILES_ACTIVE.
     default: local
@@ -45,6 +49,9 @@ spring:
     placeholders:
       vector_dimension: ${corpus.embedding.dimension}
 
+server:
+  shutdown: graceful
+
 management:
   endpoints:
     web:
@@ -60,6 +67,11 @@ corpus:
     # Must exceed the slowest legitimate ingestion: below this, a live instance's
     # in-flight work could be swept out from under it by another instance.
     stale-after: ${CORPUS_INGESTION_STALE_AFTER:15m}
+  async:
+    ingestion-concurrency: ${CORPUS_INGESTION_CONCURRENCY:4}
+    ingestion-termination: 30s
+    chat-termination: 20s
+    retrieval-termination: 5s
   retrieval:
     top-k: ${CORPUS_RETRIEVAL_TOP_K:6}
     rrf-k: ${CORPUS_RRF_K:60}

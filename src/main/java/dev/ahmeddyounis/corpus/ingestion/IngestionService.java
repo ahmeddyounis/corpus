@@ -8,10 +8,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
+import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.stereotype.Service;
 
@@ -36,13 +36,13 @@ public class IngestionService {
     private final TokenChunker chunker;
     private final VectorStore vectorStore;
     private final ChunkStore chunkStore;
-    private final ExecutorService ingestionExecutor;
+    private final AsyncTaskExecutor ingestionExecutor;
     private final RagMetrics metrics;
     private final InstanceIdentity instance;
 
     public IngestionService(DocumentRepository documents, DocumentLifecycleDao lifecycle,
                             TikaTextExtractor extractor, TokenChunker chunker, VectorStore vectorStore,
-                            ChunkStore chunkStore, ExecutorService ingestionExecutor, RagMetrics metrics,
+                            ChunkStore chunkStore, AsyncTaskExecutor ingestionExecutor, RagMetrics metrics,
                             InstanceIdentity instance) {
         this.documents = documents;
         this.lifecycle = lifecycle;

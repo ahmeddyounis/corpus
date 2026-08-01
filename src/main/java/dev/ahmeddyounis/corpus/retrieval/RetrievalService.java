@@ -7,13 +7,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.VectorStore;
 import org.springframework.ai.vectorstore.filter.Filter;
 import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.stereotype.Service;
 
 /**
@@ -28,11 +28,11 @@ public class RetrievalService {
     private final FullTextSearchDao fullTextSearch;
     private final RrfFuser fuser;
     private final CorpusRetrievalProperties properties;
-    private final ExecutorService retrievalExecutor;
+    private final AsyncTaskExecutor retrievalExecutor;
 
     public RetrievalService(VectorStore vectorStore, FullTextSearchDao fullTextSearch, RrfFuser fuser,
                             CorpusRetrievalProperties properties,
-                            @Qualifier("retrievalExecutor") ExecutorService retrievalExecutor) {
+                            @Qualifier("retrievalExecutor") AsyncTaskExecutor retrievalExecutor) {
         this.vectorStore = vectorStore;
         this.fullTextSearch = fullTextSearch;
         this.fuser = fuser;

@@ -9,7 +9,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +21,7 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -56,7 +56,7 @@ public class ChatService {
     private final RetrievalService retrievalService;
     private final ConversationService conversationService;
     private final RagPromptBuilder promptBuilder;
-    private final ExecutorService chatExecutor;
+    private final AsyncTaskExecutor chatExecutor;
     private final RagMetrics metrics;
     private final CostEstimator costEstimator;
     private final String provider;
@@ -68,7 +68,7 @@ public class ChatService {
                        RetrievalService retrievalService,
                        ConversationService conversationService,
                        RagPromptBuilder promptBuilder,
-                       @Qualifier("chatExecutor") ExecutorService chatExecutor,
+                       @Qualifier("chatExecutor") AsyncTaskExecutor chatExecutor,
                        RagMetrics metrics,
                        CostEstimator costEstimator,
                        @Value("${spring.ai.model.chat:none}") String provider) {
