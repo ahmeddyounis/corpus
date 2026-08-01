@@ -7,6 +7,12 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:corpus}
     password: ${SPRING_DATASOURCE_PASSWORD:corpus}
   ai:
+    mcp:
+      server:
+        # Stateless: no per-JVM session map, so any replica answers any call and no
+        # sticky sessions are required. All three Corpus tools are request/response,
+        # so the server-initiated notifications this gives up are unused.
+        protocol: STATELESS
     model:
       chat: ${CORPUS_CHAT_PROVIDER:anthropic}
       embedding: ${CORPUS_EMBEDDING_PROVIDER:transformers}
