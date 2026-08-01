@@ -11,8 +11,9 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
-import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.ai.vectorstore.VectorStore;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.stereotype.Service;
 
 /**
@@ -64,15 +65,23 @@ public class IngestionService {
     public DocumentEntity upload(UUID userId, String filename, String contentType, byte[] bytes) {
         DocumentEntity saved = documents.save(
                 DocumentEntity.create(userId, filename, contentType, bytes.length, instance.id()));
-        ingestionExecutor.submit(() -> {
-            try {
-                process(saved, bytes);
-            } catch (Throwable t) {
-                // The Future is discarded; without this, task failures would vanish
-                // without a log line.
-                log.error("Ingestion task for document {} failed unexpectedly", saved.id(), t);
-            }
-        });
+        try {
+            ingestionExecutor.submit(() -> {
+                try {
+                    process(saved, bytes);
+                } catch (Throwable t) {
+                    // The Future is discarded; without this, task failures would vanish
+                    // without a log line.
+                    log.error("Ingestion task for document {} failed unexpectedly", saved.id(), t);
+                }
+            });
+        } catch (TaskRejectedException e) {
+            // The bulkhead is full. Drop the row we just created rather than leaving
+            // a document that will never be processed, and let the caller retry.
+            documents.deleteById(saved.id());
+            throw new IngestionCapacityException(
+                    "Ingestion is at capacity; retry shortly (concurrency limit reached)");
+        }
         return saved;
     }
 

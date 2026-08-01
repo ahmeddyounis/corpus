@@ -1,11 +1,8 @@
 package dev.ahmeddyounis.corpus.config;
 
-import dev.ahmeddyounis.corpus.ops.AdvisoryLock;
 import dev.ahmeddyounis.corpus.security.DemoUserSeeder;
 import dev.ahmeddyounis.corpus.security.UserRepository;
 import dev.ahmeddyounis.corpus.support.AbstractIntegrationTest;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -21,15 +18,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Two instances starting simultaneously must not crash on the UNIQUE username —
  * a DuplicateKeyException escaping an ApplicationRunner closes the context and
- * exits the process — and startup work guarded by the advisory lock must run
- * exclusively rather than being duplicated.
+ * exits the process — and concurrent sample seeding must not create duplicates.
  */
 class SeedingConcurrencyIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired
     private DemoUserSeeder demoUserSeeder;
     @Autowired
-    private AdvisoryLock advisoryLock;
+    private dev.ahmeddyounis.corpus.ingestion.IngestionService ingestionService;
     @Autowired
     private UserRepository users;
     @Autowired
@@ -71,34 +67,32 @@ class SeedingConcurrencyIntegrationTest extends AbstractIntegrationTest {
     }
 
     /**
-     * The seeders' bodies are check-then-act. This proves the lock serializes them,
-     * using the same read-then-write shape without paying for real ingestion.
+     * Concurrent seeding is made safe by the unique index rather than a lock: a
+     * losing writer gets a duplicate-key error, which the seeder treats as "already
+     * seeded". Proven here with the same shape the seeder uses.
      */
     @Test
-    void advisoryLockSerializesCheckThenActStartupWork() throws Exception {
-        jdbc.sql("DROP TABLE IF EXISTS seed_probe").update();
-        jdbc.sql("CREATE TABLE seed_probe (marker varchar(50))").update();
-        List<String> failures = new ArrayList<>();
+    void duplicateSeedingIsRejectedByTheUniqueIndex() throws Exception {
+        var demo = users.findByUsername("demo").orElseThrow();
+        byte[] content = "# Concurrent seed probe\nContent.".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        java.util.List<Exception> outcomes = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
 
-        runConcurrently(() -> advisoryLock.runExclusively(AdvisoryLock.SEED_LOCK, () -> {
-            Integer existing = jdbc.sql("SELECT count(*) FROM seed_probe WHERE marker = 'seeded'")
-                    .query(Integer.class)
-                    .single();
-            if (existing == 0) {
-                try {
-                    Thread.sleep(200); // widen the window a naive check-then-act would lose
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-                jdbc.sql("INSERT INTO seed_probe (marker) VALUES ('seeded')").update();
+        runConcurrently(() -> {
+            try {
+                ingestionService.upload(demo.id(), "concurrent-seed-probe.md", "text/markdown", content);
+            } catch (org.springframework.dao.DuplicateKeyException expected) {
+                outcomes.add(expected);
             }
-        }));
+        });
 
-        Integer seeded = jdbc.sql("SELECT count(*) FROM seed_probe WHERE marker = 'seeded'")
+        Integer rows = jdbc.sql("""
+                        SELECT count(*) FROM documents
+                        WHERE user_id = :userId AND filename = 'concurrent-seed-probe.md'
+                        """)
+                .param("userId", demo.id())
                 .query(Integer.class)
                 .single();
-        assertThat(seeded).as("guarded startup work runs exactly once").isEqualTo(1);
-        assertThat(failures).isEmpty();
-        jdbc.sql("DROP TABLE seed_probe").update();
+        assertThat(rows).as("the unique index admits exactly one writer").isEqualTo(1);
+        assertThat(outcomes).as("the losing writer saw a duplicate-key error, not a crash").hasSize(1);
     }
 }

@@ -62,6 +62,8 @@ public class DocumentController {
         } catch (DataIntegrityViolationException e) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "A document named '" + filename + "' already exists; delete it first.");
+        } catch (IngestionCapacityException e) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, e.getMessage());
         }
     }
 
