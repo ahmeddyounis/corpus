@@ -1,69 +1,156 @@
 {
   "uid": "corpus-rag",
-  "title": "Corpus — RAG Observability",
-  "tags": ["corpus", "llm", "rag"],
+  "title": "Corpus \u2014 RAG Observability",
+  "tags": [
+    "corpus",
+    "llm",
+    "rag"
+  ],
   "timezone": "browser",
   "schemaVersion": 39,
   "version": 1,
   "refresh": "30s",
-  "time": { "from": "now-6h", "to": "now" },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
   "panels": [
     {
       "id": 1,
       "type": "stat",
       "title": "Estimated LLM spend (session)",
-      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "corpus-prom" },
-      "fieldConfig": { "defaults": { "unit": "currencyUSD", "decimals": 4 }, "overrides": [] },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "corpus-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 4
+        },
+        "overrides": []
+      },
       "targets": [
-        { "refId": "A", "expr": "sum(corpus_llm_cost_estimate_usd_total)" }
+        {
+          "refId": "A",
+          "expr": "sum(corpus_llm_cost_estimate_usd_total)"
+        }
       ]
     },
     {
       "id": 2,
       "type": "stat",
-      "title": "Retrieval top score (last)",
-      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "corpus-prom" },
-      "fieldConfig": { "defaults": { "decimals": 3 }, "overrides": [] },
+      "title": "Retrieval top score (fleet mean, 15m)",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "corpus-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3
+        },
+        "overrides": []
+      },
       "targets": [
-        { "refId": "A", "expr": "corpus_retrieval_top_score" }
+        {
+          "refId": "A",
+          "expr": "sum(rate(corpus_retrieval_top_score_observed_sum[15m])) / sum(rate(corpus_retrieval_top_score_observed_count[15m]))"
+        }
       ]
     },
     {
       "id": 3,
       "type": "stat",
-      "title": "Retrieval score spread (last)",
-      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "corpus-prom" },
-      "fieldConfig": { "defaults": { "decimals": 3 }, "overrides": [] },
+      "title": "Retrieval score spread (fleet mean, 15m)",
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "corpus-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3
+        },
+        "overrides": []
+      },
       "targets": [
-        { "refId": "A", "expr": "corpus_retrieval_score_spread" }
+        {
+          "refId": "A",
+          "expr": "sum(rate(corpus_retrieval_score_spread_observed_sum[15m])) / sum(rate(corpus_retrieval_score_spread_observed_count[15m]))"
+        }
       ]
     },
     {
       "id": 4,
       "type": "stat",
       "title": "Rate-limited requests (429/min)",
-      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
-      "datasource": { "type": "prometheus", "uid": "corpus-prom" },
-      "fieldConfig": { "defaults": { "decimals": 2 }, "overrides": [] },
+      "gridPos": {
+        "h": 6,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "corpus-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2
+        },
+        "overrides": []
+      },
       "targets": [
-        { "refId": "A", "expr": "sum(rate(http_server_requests_seconds_count{status=\"429\"}[5m])) * 60 or vector(0)" }
+        {
+          "refId": "A",
+          "expr": "sum(rate(http_server_requests_seconds_count{status=\"429\"}[5m])) * 60 or vector(0)"
+        }
       ]
     },
     {
       "id": 5,
       "type": "timeseries",
       "title": "Token throughput (tokens/min)",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
-      "datasource": { "type": "prometheus", "uid": "corpus-prom" },
-      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 12 } }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "corpus-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 12
+          }
+        },
+        "overrides": []
+      },
       "targets": [
         {
           "refId": "A",
           "expr": "sum by (direction, model) (rate(corpus_llm_tokens_total[5m])) * 60",
-          "legendFormat": "{{direction}} · {{model}}"
+          "legendFormat": "{{direction}} \u00b7 {{model}}"
         }
       ]
     },
@@ -71,9 +158,25 @@
       "id": 6,
       "type": "timeseries",
       "title": "Estimated cost rate (USD/hour)",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
-      "datasource": { "type": "prometheus", "uid": "corpus-prom" },
-      "fieldConfig": { "defaults": { "unit": "currencyUSD", "custom": { "fillOpacity": 12 } }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "corpus-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "fillOpacity": 12
+          }
+        },
+        "overrides": []
+      },
       "targets": [
         {
           "refId": "A",
@@ -86,9 +189,25 @@
       "id": 7,
       "type": "timeseries",
       "title": "RAG phase latency p95",
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "corpus-prom" },
-      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 8 } }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "corpus-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
       "targets": [
         {
           "refId": "A",
@@ -101,9 +220,24 @@
       "id": 8,
       "type": "timeseries",
       "title": "HTTP request rate by endpoint",
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
-      "datasource": { "type": "prometheus", "uid": "corpus-prom" },
-      "fieldConfig": { "defaults": { "custom": { "fillOpacity": 8 } }, "overrides": [] },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "corpus-prom"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "fillOpacity": 8
+          }
+        },
+        "overrides": []
+      },
       "targets": [
         {
           "refId": "A",

@@ -57,8 +57,20 @@ class MetricsIntegrationTest extends AbstractIntegrationTest {
                 .contains("phase=\"full_response\"")
                 .contains("corpus_llm_tokens_total")
                 .contains("direction=\"input\"")
-                .contains("corpus_llm_cost_estimate_usd_total")
-                .contains("corpus_retrieval_top_score")
-                .contains("corpus_retrieval_score_spread");
+                .contains("corpus_llm_cost_estimate_usd_total");
+
+        // Assert the aggregation-safe summaries by their exact series names: a plain
+        // `contains("corpus_retrieval_top_score")` also matches the _observed variant,
+        // so it would keep passing even if the gauge disappeared entirely.
+        assertThat(metrics)
+                .contains("corpus_retrieval_top_score_observed_count")
+                .contains("corpus_retrieval_top_score_observed_sum")
+                .contains("corpus_retrieval_score_spread_observed_count")
+                .contains("corpus_retrieval_score_spread_observed_sum");
+        assertThat(metrics.lines().anyMatch(line -> line.startsWith("corpus_retrieval_top_score ")))
+                .as("the per-instance gauge is still exported once retrieval has run")
+                .isTrue();
+        assertThat(metrics.lines().anyMatch(line -> line.startsWith("corpus_retrieval_score_spread ")))
+                .isTrue();
     }
 }

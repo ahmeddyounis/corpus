@@ -19,16 +19,27 @@ import org.springframework.stereotype.Component;
 public class RagMetrics {
 
     private final MeterRegistry registry;
-    private final AtomicReference<Double> topScore = new AtomicReference<>(0.0);
-    private final AtomicReference<Double> scoreSpread = new AtomicReference<>(0.0);
+    // NaN, not 0.0: Micrometer omits NaN gauges from the Prometheus exposition, so a
+    // replica that has served no retrieval reports nothing instead of a fake zero that
+    // would drag a fleet-wide panel down and read as "retrieval collapsed".
+    private final AtomicReference<Double> topScore = new AtomicReference<>(Double.NaN);
+    private final AtomicReference<Double> scoreSpread = new AtomicReference<>(Double.NaN);
     private final DistributionSummary topScoreSummary;
+    private final DistributionSummary scoreSpreadSummary;
 
     public RagMetrics(MeterRegistry registry) {
         this.registry = registry;
-        registry.gauge("corpus.retrieval.top.score", topScore, r -> r.get());
-        registry.gauge("corpus.retrieval.score.spread", scoreSpread, r -> r.get());
+        registry.gauge("corpus.retrieval.top.score", topScore, AtomicReference::get);
+        registry.gauge("corpus.retrieval.score.spread", scoreSpread, AtomicReference::get);
+        // Gauges are last-write-wins per instance; these summaries are what aggregate
+        // correctly across replicas (sum(rate(_sum)) / sum(rate(_count))).
         this.topScoreSummary = DistributionSummary.builder("corpus.retrieval.top.score.observed")
                 .description("Distribution of RRF top scores per retrieval")
+                .publishPercentileHistogram()
+                .register(registry);
+        this.scoreSpreadSummary = DistributionSummary.builder("corpus.retrieval.score.spread.observed")
+                .description("Distribution of RRF score spread (top minus last) per retrieval")
+                .publishPercentileHistogram()
                 .register(registry);
     }
 
@@ -64,13 +75,16 @@ public class RagMetrics {
         if (chunks.isEmpty()) {
             topScore.set(0.0);
             scoreSpread.set(0.0);
+            topScoreSummary.record(0.0);
+            scoreSpreadSummary.record(0.0);
             return;
         }
         double top = chunks.getFirst().rrfScore();
-        double last = chunks.getLast().rrfScore();
+        double spread = top - chunks.getLast().rrfScore();
         topScore.set(top);
-        scoreSpread.set(top - last);
+        scoreSpread.set(spread);
         topScoreSummary.record(top);
+        scoreSpreadSummary.record(spread);
     }
 
     private Counter tokenCounter(String provider, String model, String direction) {
