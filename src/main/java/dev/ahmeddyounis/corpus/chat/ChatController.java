@@ -3,7 +3,10 @@ package dev.ahmeddyounis.corpus.chat;
 import dev.ahmeddyounis.corpus.security.CurrentUser;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import java.util.UUID;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,7 +21,9 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RequestMapping("/api")
 public class ChatController {
 
-    public record ChatRequestBody(UUID conversationId, @NotBlank String message, Integer topK) {
+    public record ChatRequestBody(UUID conversationId,
+                                  @NotBlank @Size(max = 4000) String message,
+                                  @Min(1) @Max(20) Integer topK) {
     }
 
     private final ChatService chatService;

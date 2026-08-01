@@ -134,6 +134,8 @@ corpus:
     top-k: ${CORPUS_RETRIEVAL_TOP_K:6}
     rrf-k: ${CORPUS_RRF_K:60}
     candidate-k: 20
+    # Hard ceiling enforced in RetrievalService, covering the MCP path too.
+    max-top-k: ${CORPUS_MAX_TOP_K:20}
   rate-limit:
     rpm: ${CORPUS_RATE_LIMIT_RPM:30}
     token-rpm: ${CORPUS_TOKEN_RATE_LIMIT_RPM:10}

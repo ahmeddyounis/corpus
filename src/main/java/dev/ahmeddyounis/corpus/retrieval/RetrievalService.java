@@ -46,7 +46,11 @@ public class RetrievalService {
 
     public List<ScoredChunk> search(UUID userId, String query, Integer topKOverride, List<UUID> documentIds) {
         int candidateK = properties.candidateK();
-        int topK = topKOverride != null && topKOverride > 0 ? topKOverride : properties.topK();
+        int requested = topKOverride != null && topKOverride > 0 ? topKOverride : properties.topK();
+        // Clamped here rather than only at the controller: MCP tool arguments come
+        // from a model and never pass through bean validation. The previous ceiling
+        // was an accident of candidateK, not a control.
+        int topK = Math.clamp(requested, 1, properties.maxTopK());
 
         CompletableFuture<List<Document>> vectorFuture =
                 CompletableFuture.supplyAsync(() -> vectorSearch(userId, query, candidateK, documentIds),

@@ -17,6 +17,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class CorpusMcpTools {
 
+    private static final int DEFAULT_LIST_LIMIT = 50;
+    private static final int MAX_LIST_LIMIT = 200;
+
     public record SearchHit(String chunkId, String documentId, String filename, int chunkIndex,
                             int rank, double rrfScore, String content) {
     }
@@ -78,9 +81,13 @@ public class CorpusMcpTools {
 
     @McpTool(name = "list_documents",
             description = "List the user's uploaded documents with ingestion status and chunk counts.")
-    public List<DocumentInfo> listDocuments() {
+    public List<DocumentInfo> listDocuments(
+            @McpToolParam(description = "Maximum documents to return (default 50)", required = false)
+            Integer limit) {
         UUID userId = userResolver.resolveUserId();
+        int cap = Math.clamp(limit != null && limit > 0 ? limit : DEFAULT_LIST_LIMIT, 1, MAX_LIST_LIMIT);
         return ingestionService.list(userId).stream()
+                .limit(cap)
                 .map(d -> new DocumentInfo(d.id().toString(), d.filename(), d.status().name(),
                         d.sizeBytes(), d.chunkCount(), d.error()))
                 .toList();
