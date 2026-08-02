@@ -162,6 +162,9 @@ corpus:
     candidate-k: 20
     # Hard ceiling enforced in RetrievalService, covering the MCP path too.
     max-top-k: ${CORPUS_MAX_TOP_K:20}
+  rerank:
+    # Per-request default; the /api/search `rerank` flag overrides it per call.
+    enabled: ${CORPUS_RERANK_ENABLED:false}
   rate-limit:
     rpm: ${CORPUS_RATE_LIMIT_RPM:30}
     token-rpm: ${CORPUS_TOKEN_RATE_LIMIT_RPM:10}

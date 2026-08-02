@@ -127,7 +127,7 @@ flowchart LR
 | `POST` | `/api/documents` | Upload a document (multipart `file`); triggers async ingestion, returns 202 |
 | `GET` | `/api/documents` | List the caller's documents + ingestion status (paginated: `?page=&size=`, max 100) |
 | `DELETE` | `/api/documents/{id}` | Remove a document and its chunks/embeddings |
-| `POST` | `/api/search` | Retrieval only — ranked chunks with RRF/vector/FTS scores (debug/inspection) |
+| `POST` | `/api/search` | Retrieval only — ranked chunks with RRF/vector/FTS/rerank scores; `rerank: true\|false` A/Bs ranking per request |
 | `POST` | `/api/chat` | Ask a question; **SSE stream**: `token`* → `citations` → `usage` → `done` |
 | `GET` | `/api/conversations` | List the caller's conversations, newest first (paginated) |
 | `GET` | `/api/conversations/{id}` | Conversation metadata + message history |
@@ -212,6 +212,7 @@ curl -N -X POST localhost:8080/api/chat \
 | `CORPUS_TOKEN_RATE_LIMIT_RPM` | `10` | Per-IP attempts/minute on `/api/auth/token` |
 | `CORPUS_RATE_LIMIT_BACKEND` | `memory` (deployed: `postgres`) | `postgres` shares budgets across replicas |
 | `CORPUS_MAX_TOP_K` | `20` | Hard ceiling on retrieved chunks (covers MCP tool calls) |
+| `CORPUS_RERANK_ENABLED` | `false` | Default for second-stage reranking; `/api/search`'s `rerank` flag overrides per request |
 | `CORPUS_DB_POOL_SIZE` | `10` | Hikari max pool size; `replicas x this` must fit the DB connection cap |
 | `CORPUS_INGESTION_CONCURRENCY` | `4` | Concurrent ingestions before load shedding (503) |
 | `CORPUS_RESILIENCE_ENABLED` | `true` | Circuit breakers around chat/embedding calls |

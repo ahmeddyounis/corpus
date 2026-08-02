@@ -15,7 +15,7 @@ class RagMetricsTest {
 
     private static ScoredChunk chunk(int rank, double rrf) {
         return new ScoredChunk(UUID.randomUUID(), UUID.randomUUID(), "doc.md", 0, "text",
-                rank, rrf, null, null);
+                rank, rrf, null, null, null);
     }
 
     /**

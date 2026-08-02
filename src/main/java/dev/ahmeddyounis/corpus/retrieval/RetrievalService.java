@@ -21,8 +21,9 @@ import org.springframework.stereotype.Service;
 
 /**
  * Hybrid retrieval: the vector and full-text legs run in parallel on virtual
- * threads, then Reciprocal Rank Fusion merges both rankings on chunk id.
- * Every path is scoped to the calling user via chunk metadata.
+ * threads, then Reciprocal Rank Fusion merges both rankings on chunk id and a
+ * {@link Reranker} picks the final window. Every path is scoped to the calling
+ * user via chunk metadata.
  */
 @Service
 public class RetrievalService {
@@ -31,24 +32,39 @@ public class RetrievalService {
     private final FullTextSearchDao fullTextSearch;
     private final RrfFuser fuser;
     private final CorpusRetrievalProperties properties;
+    private final CorpusRerankProperties rerankProperties;
+    private final Reranker reranker;
     private final AsyncTaskExecutor retrievalExecutor;
     private final ModelResilience resilience;
     private final ObservationRegistry observations;
 
     public RetrievalService(VectorStore vectorStore, FullTextSearchDao fullTextSearch, RrfFuser fuser,
-                            CorpusRetrievalProperties properties,
+                            CorpusRetrievalProperties properties, CorpusRerankProperties rerankProperties,
+                            Reranker reranker,
                             @Qualifier("retrievalExecutor") AsyncTaskExecutor retrievalExecutor,
                             ModelResilience resilience, ObservationRegistry observations) {
         this.vectorStore = vectorStore;
         this.fullTextSearch = fullTextSearch;
         this.fuser = fuser;
         this.properties = properties;
+        this.rerankProperties = rerankProperties;
+        this.reranker = reranker;
         this.retrievalExecutor = retrievalExecutor;
         this.resilience = resilience;
         this.observations = observations;
     }
 
     public List<ScoredChunk> search(UUID userId, String query, Integer topKOverride, List<UUID> documentIds) {
+        return search(userId, query, topKOverride, documentIds, null);
+    }
+
+    /**
+     * @param rerank null to use the configured default; an explicit value overrides
+     *               it for this call, which is what makes an A/B against a live
+     *               index possible without a redeploy.
+     */
+    public List<ScoredChunk> search(UUID userId, String query, Integer topKOverride, List<UUID> documentIds,
+                                    Boolean rerank) {
         int candidateK = properties.candidateK();
         int requested = topKOverride != null && topKOverride > 0 ? topKOverride : properties.topK();
         // Clamped here rather than only at the controller: MCP tool arguments come
@@ -90,18 +106,25 @@ public class RetrievalService {
 
         Map<UUID, Double> fused = fuser.fuse(properties.rrfK(), vectorRanking, ftsRanking);
 
-        List<ScoredChunk> results = new ArrayList<>();
+        // The whole fused set is materialised, not just the top-k slice: the reranker
+        // is what decides the final window, and one handed a pre-truncated list could
+        // only reorder what fusion already accepted.
+        List<ScoredChunk> candidates = new ArrayList<>(fused.size());
         int rank = 1;
         for (Map.Entry<UUID, Double> entry : fused.entrySet()) {
-            if (rank > topK) {
-                break;
-            }
             UUID chunkId = entry.getKey();
-            Document vector = vectorById.get(chunkId);
-            FtsHit fts = ftsById.get(chunkId);
-            results.add(toScoredChunk(chunkId, rank++, entry.getValue(), vector, fts));
+            candidates.add(toScoredChunk(chunkId, rank++, entry.getValue(),
+                    vectorById.get(chunkId), ftsById.get(chunkId)));
         }
-        return results;
+
+        boolean applyRerank = rerank != null ? rerank : rerankProperties.enabled();
+        if (!applyRerank) {
+            return candidates.size() <= topK ? candidates : new ArrayList<>(candidates.subList(0, topK));
+        }
+        int window = topK;
+        return Observation.createNotStarted("corpus.retrieval.rerank", observations)
+                .lowCardinalityKeyValue("reranker", reranker.name())
+                .observe(() -> reranker.rerank(query, candidates, window));
     }
 
     private static ScoredChunk toScoredChunk(UUID chunkId, int rank, double rrfScore, Document vector, FtsHit fts) {
@@ -114,10 +137,11 @@ public class RetrievalService {
                     vector.getText(),
                     rank, rrfScore,
                     vector.getScore(),
-                    fts != null ? fts.rank() : null);
+                    fts != null ? fts.rank() : null,
+                    null);
         }
         return new ScoredChunk(chunkId, fts.documentId(), fts.filename(), fts.chunkIndex(), fts.content(),
-                rank, rrfScore, null, fts.rank());
+                rank, rrfScore, null, fts.rank(), null);
     }
 
     private List<Document> vectorSearch(UUID userId, String query, int candidateK, List<UUID> documentIds) {
