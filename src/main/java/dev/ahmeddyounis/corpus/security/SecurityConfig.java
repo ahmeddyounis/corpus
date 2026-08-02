@@ -24,10 +24,21 @@ import org.springframework.security.web.SecurityFilterChain;
 public class SecurityConfig {
 
     @Bean
-    SecurityFilterChain securityFilterChain(HttpSecurity http, CorpusRateLimitProperties rateLimitProperties)
-            throws Exception {
+    SecurityFilterChain securityFilterChain(HttpSecurity http, CorpusRateLimitProperties rateLimitProperties,
+                                            RateLimitBuckets rateLimitBuckets,
+                                            CorpusSecurityProperties securityProperties) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
+                .cors(cors -> cors.configurationSource(corsConfigurationSource(securityProperties)))
+                .headers(headers -> headers
+                        .httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true).maxAgeInSeconds(31_536_000))
+                        .referrerPolicy(referrer -> referrer.policy(
+                                org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter
+                                        .ReferrerPolicy.NO_REFERRER))
+                        // Swagger UI needs inline styles/scripts, so the strict policy is
+                        // scoped to the API and MCP surfaces rather than applied globally.
+                        .contentSecurityPolicy(csp -> csp.policyDirectives(
+                                "default-src 'none'; frame-ancestors 'none'; base-uri 'none'")))
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
@@ -42,12 +53,37 @@ public class SecurityConfig {
                         .requestMatchers("/mcp", "/mcp/**").permitAll()
                         .anyRequest().authenticated())
                 .oauth2ResourceServer(oauth2 -> oauth2.jwt(Customizer.withDefaults()))
-                .addFilterAfter(new RateLimitFilter(rateLimitProperties), BearerTokenAuthenticationFilter.class);
+                .addFilterAfter(new RateLimitFilter(rateLimitProperties, rateLimitBuckets),
+                        BearerTokenAuthenticationFilter.class);
         return http.build();
     }
 
     /** The development fallback shipped in application.yml — public knowledge by definition. */
     static final String DEV_DEFAULT_SECRET = "corpus-local-dev-secret-0123456789-abcdefghijklmnop";
+
+    /**
+     * CORS is off unless origins are configured. The API is bearer-token only and
+     * never cookie-based, so credentials stay disabled.
+     */
+    private static org.springframework.web.cors.CorsConfigurationSource corsConfigurationSource(
+            CorpusSecurityProperties properties) {
+        org.springframework.web.cors.CorsConfiguration configuration =
+                new org.springframework.web.cors.CorsConfiguration();
+        configuration.setAllowedOrigins(properties.cors().allowedOrigins());
+        configuration.setAllowedMethods(java.util.List.of("GET", "POST", "DELETE", "OPTIONS"));
+        configuration.setAllowedHeaders(java.util.List.of(
+                "Authorization", "Content-Type", "Accept", "X-Request-Id",
+                "Mcp-Session-Id", "MCP-Protocol-Version"));
+        configuration.setExposedHeaders(java.util.List.of(
+                "X-RateLimit-Remaining", "Retry-After", "X-Request-Id", "Mcp-Session-Id"));
+        configuration.setAllowCredentials(false);
+        org.springframework.web.cors.UrlBasedCorsConfigurationSource source =
+                new org.springframework.web.cors.UrlBasedCorsConfigurationSource();
+        if (!properties.cors().allowedOrigins().isEmpty()) {
+            source.registerCorsConfiguration("/**", configuration);
+        }
+        return source;
+    }
 
     @Bean
     JwtDecoder jwtDecoder(CorpusSecurityProperties properties, Environment environment) {

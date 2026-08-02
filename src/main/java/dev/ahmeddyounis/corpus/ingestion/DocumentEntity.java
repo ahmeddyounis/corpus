@@ -5,6 +5,11 @@ import java.util.UUID;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.relational.core.mapping.Table;
 
+/**
+ * A document row. Status transitions after creation go through
+ * {@link DocumentLifecycleDao} so they are compare-and-set guarded against
+ * concurrent instances; this record is otherwise a plain data carrier.
+ */
 @Table("documents")
 public record DocumentEntity(
         @Id UUID id,
@@ -16,26 +21,14 @@ public record DocumentEntity(
         String error,
         int chunkCount,
         Instant createdAt,
-        Instant updatedAt) {
+        Instant updatedAt,
+        String ownerInstance,
+        Instant claimedAt) {
 
-    public static DocumentEntity create(UUID userId, String filename, String contentType, long sizeBytes) {
+    public static DocumentEntity create(UUID userId, String filename, String contentType,
+                                        long sizeBytes, String ownerInstance) {
         Instant now = Instant.now();
         return new DocumentEntity(null, userId, filename, contentType, sizeBytes,
-                DocumentStatus.PENDING, null, 0, now, now);
-    }
-
-    public DocumentEntity processing() {
-        return new DocumentEntity(id, userId, filename, contentType, sizeBytes,
-                DocumentStatus.PROCESSING, null, chunkCount, createdAt, Instant.now());
-    }
-
-    public DocumentEntity ready(int chunks) {
-        return new DocumentEntity(id, userId, filename, contentType, sizeBytes,
-                DocumentStatus.READY, null, chunks, createdAt, Instant.now());
-    }
-
-    public DocumentEntity failed(String message) {
-        return new DocumentEntity(id, userId, filename, contentType, sizeBytes,
-                DocumentStatus.FAILED, message, 0, createdAt, Instant.now());
+                DocumentStatus.PENDING, null, 0, now, now, ownerInstance, now);
     }
 }

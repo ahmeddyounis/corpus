@@ -1,4 +1,10 @@
 # Golden evaluation set for Corpus retrieval + answer quality.
+#
+# Six of the sample documents are deliberate distractors: they cover the same
+# vocabulary as a real source but answer a different question (index tuning in
+# general vs. what Corpus configures, IR metric definitions vs. Corpus's gates).
+# Cases tagged `hard` are the ones whose keywords appear in both, so a system
+# that matches on surface terms alone ranks the wrong document first.
 # Each case: a question, the sample document(s) that contain the answer, and a
 # reference answer used by the nightly LLM-as-judge evals. Per sample document
 # there are two flavors: one keyword-heavy question (exercises the full-text
@@ -7,6 +13,7 @@
 version: 1
 cases:
   - id: arch-monolith-why
+    tags: [paraphrase]
     question: "Why is Corpus built as a modular monolith instead of microservices?"
     expected_sources: [corpus-architecture.md]
     reference_answer: >-
@@ -68,9 +75,10 @@ cases:
     question: "What thresholds gate recall@5 and MRR in CI?"
     expected_sources: [rag-evaluation.md]
     reference_answer: >-
-      The build gates retrieval at recall@5 of at least 0.85 and Mean
-      Reciprocal Rank of at least 0.70, computed per pull request over the
-      golden set with deterministic in-process embeddings.
+      The build gates retrieval at recall@3 of at least 0.82, recall@5 of at
+      least 0.88, MRR of at least 0.74, and nDCG@5 of at least 0.76, computed
+      per pull request over the golden set with deterministic in-process
+      embeddings.
 
   - id: evals-hallucination-check
     question: "How does the project check that generated answers are not making things up?"
@@ -152,3 +160,161 @@ cases:
       messages of the active conversation into the prompt before each call
       and persists new turns afterwards, keyed by a conversation id
       parameter.
+
+  # --- distractor-sensitive cases -------------------------------------------
+
+  - id: hnsw-corpus-actual-values
+    tags: [hard]
+    question: "Which HNSW build parameters does Corpus itself configure, and to what values?"
+    expected_sources: [pgvector-guide.md]
+    related_sources: [hnsw-vs-ivfflat.md]
+    reference_answer: >-
+      Corpus builds its HNSW index with m = 16 and ef_construction = 64 over
+      vector_cosine_ops.
+
+  - id: ivfflat-empty-table
+    tags: [hard]
+    question: "Why does building an index on an empty table hurt IVFFlat but not HNSW?"
+    expected_sources: [hnsw-vs-ivfflat.md]
+    related_sources: [pgvector-guide.md]
+    reference_answer: >-
+      IVFFlat derives its partitions by clustering the vectors present at build
+      time, so an index built on an empty table has meaningless partitions and
+      recall collapses. HNSW builds a navigable graph incrementally and stays
+      accurate as rows arrive.
+
+  - id: corpus-gate-values
+    tags: [hard]
+    question: "What retrieval scores must Corpus achieve for the build to pass?"
+    expected_sources: [rag-evaluation.md]
+    related_sources: [retrieval-metrics-glossary.md]
+    reference_answer: >-
+      The build gates retrieval quality on the golden set and fails when the
+      thresholds are not met; the current gates are recorded in the evaluation
+      documentation and enforced by the retrieval eval test.
+
+  - id: ndcg-definition
+    tags: [hard]
+    question: "How is discounted cumulative gain normalised, and why use it over MRR?"
+    expected_sources: [retrieval-metrics-glossary.md]
+    related_sources: [rag-evaluation.md]
+    reference_answer: >-
+      Each result contributes gain discounted logarithmically by position, and
+      the sum is divided by the ideal ordering's score to give a value in [0,1].
+      It is preferred over MRR when several results matter and their relative
+      ordering matters, not just the position of the first hit.
+
+  - id: corpus-signing-choice
+    tags: [hard]
+    question: "Which signing algorithm does Corpus use for its own tokens?"
+    expected_sources: [jwt-security-primer.md]
+    related_sources: [oauth2-vs-jwt.md]
+    reference_answer: >-
+      HMAC-SHA256 (HS256) with a symmetric secret of at least 256 bits, chosen
+      because a single service issues and validates its own tokens.
+
+  - id: algorithm-confusion-attack
+    tags: [hard]
+    question: "How can a validator be tricked into accepting a token signed with the wrong algorithm?"
+    expected_sources: [oauth2-vs-jwt.md]
+    related_sources: [jwt-security-primer.md]
+    reference_answer: >-
+      Algorithm confusion: a validator that trusts the token's own alg header can
+      be induced to verify an RS256 token as HS256 using the public key as the
+      HMAC secret. Pinning the expected algorithm at the validator prevents it.
+
+  - id: corpus-chunk-defaults-vs-budget
+    tags: [hard]
+    question: "What chunk size and overlap does Corpus use by default?"
+    expected_sources: [chunking-strategies.md]
+    related_sources: [token-budgeting.md]
+    reference_answer: >-
+      512 tokens with 64 tokens of overlap, counted with the cl100k_base
+      tokenizer, both configurable via CORPUS_CHUNK_SIZE and CORPUS_CHUNK_OVERLAP.
+
+  - id: context-diminishing-returns
+    tags: [hard]
+    question: "Why does adding more retrieved passages to a prompt eventually stop helping?"
+    expected_sources: [token-budgeting.md]
+    related_sources: [chunking-strategies.md, rag-evaluation.md]
+    reference_answer: >-
+      Marginal recall gain flattens while cost keeps rising linearly, and long
+      contexts dilute attention with position effects that disadvantage material
+      in the middle, so a smaller well-ordered context often beats a larger one.
+
+  - id: corpus-rrf-constant
+    tags: [hard]
+    question: "What fusion constant does Corpus use when merging its two retrieval legs?"
+    expected_sources: [corpus-architecture.md, pgvector-guide.md, rag-evaluation.md]
+    related_sources: [reranking-and-fusion.md]
+    reference_answer: >-
+      Reciprocal Rank Fusion with k = 60, configurable through CORPUS_RRF_K.
+
+  - id: cross-encoder-vs-bi-encoder
+    tags: [hard]
+    question: "Why can't a cross-encoder score be precomputed at index time?"
+    expected_sources: [reranking-and-fusion.md]
+    related_sources: [spring-ai-overview.md]
+    reference_answer: >-
+      A cross-encoder takes the query and candidate together as a single input
+      and scores them jointly, so its score depends on the query and cannot exist
+      before the query does. Bi-encoders embed documents independently, which is
+      what makes them precomputable.
+
+  - id: overretrieve-before-rerank
+    tags: [hard]
+    question: "Why should the first retrieval stage return more candidates than the final answer uses?"
+    expected_sources: [reranking-and-fusion.md]
+    related_sources: [rag-evaluation.md]
+    reference_answer: >-
+      Fusing to exactly the final k leaves the reranker only able to permute;
+      over-retrieving lets it promote something the first stage ranked poorly,
+      which is where most of the measured gain comes from.
+
+  - id: tool-identity-authority
+    tags: [hard]
+    question: "Who decides which user a tool call acts as?"
+    expected_sources: [tool-calling-patterns.md, spring-ai-overview.md]
+    related_sources: [mcp-protocol.md]
+    reference_answer: >-
+      The application, from the authenticated request context — never the model.
+      The model decides whether to call a tool; identity must not be derivable
+      from tool arguments, or the tool becomes a privilege-escalation primitive.
+
+  - id: mcp-transport-choice
+    tags: [hard]
+    question: "What advantage does streamable HTTP have over the older SSE transport?"
+    expected_sources: [mcp-protocol.md]
+    related_sources: [tool-calling-patterns.md]
+    reference_answer: >-
+      It behaves like ordinary HTTP on a single endpoint, so it works through
+      load balancers, proxies, and API gateways without the separate
+      event/message endpoints and sticky-session handling the older SSE
+      transport required.
+
+  - id: corpus-cost-metric-name
+    tags: [keyword]
+    question: "Which metric records estimated LLM spend?"
+    expected_sources: [observability-llm.md]
+    related_sources: [token-budgeting.md]
+    reference_answer: >-
+      corpus_llm_cost_estimate_usd_total, produced by multiplying token usage by
+      a configurable per-million-token price table and tagged by provider and model.
+
+  - id: output-vs-input-pricing
+    tags: [hard]
+    question: "Which costs more per token, the prompt or the completion?"
+    expected_sources: [token-budgeting.md]
+    related_sources: [observability-llm.md]
+    reference_answer: >-
+      Output tokens are generally priced several times higher than input tokens,
+      which makes response-length instructions a real cost control.
+
+  - id: corpus-phase-timers
+    tags: [keyword]
+    question: "Which pipeline phases does Corpus time separately?"
+    expected_sources: [observability-llm.md]
+    related_sources: [token-budgeting.md]
+    reference_answer: >-
+      embedding, retrieval, first_token, and full_response, each a Micrometer
+      timer with histogram buckets so percentiles can be computed per phase.

@@ -18,6 +18,9 @@ public class ConversationService {
     public record ConversationHistory(UUID id, String title, Instant createdAt, List<MessageView> messages) {
     }
 
+    public record ConversationSummary(UUID id, String title, Instant createdAt) {
+    }
+
     private final ConversationRepository conversations;
     private final ChatMemoryRepository chatMemoryRepository;
 
@@ -33,6 +36,11 @@ public class ConversationService {
         }
         return conversations.findByIdAndUserId(conversationId, userId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Conversation not found"));
+    }
+
+    public org.springframework.data.domain.Page<ConversationEntity> list(
+            UUID userId, org.springframework.data.domain.Pageable pageable) {
+        return conversations.findByUserId(userId, pageable);
     }
 
     public ConversationHistory history(UUID userId, UUID conversationId) {

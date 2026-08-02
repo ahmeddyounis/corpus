@@ -1,0 +1,89 @@
+# Fly.io configuration for the public Corpus demo.
+#
+# Fly over Render, decisively: Render's free Postgres is deleted after 30 days,
+# which is fatal for a link a reviewer opens months from now, and its free web
+# services cold-start in 30-60s, which is brutal for a JVM loading two ONNX
+# models. Fly has first-class pgvector, a volume for the model cache, and sets
+# the unforgeable Fly-Client-IP header that per-client rate limiting needs.
+
+app = "corpus-demo"
+primary_region = "iad"
+
+[build]
+  # Published by .github/workflows/publish.yml; deploy-demo.yml pins the digest.
+  image = "ghcr.io/ahmeddyounis/corpus:latest"
+
+[env]
+  # Keyless, and that is the security control, not a limitation. With no API key
+  # configured a stranger cannot drain anyone's budget: ingestion, hybrid search,
+  # reranking, MCP search/list, metrics, and Swagger all work, while /api/chat
+  # returns a self-documenting 503 explaining how to enable it.
+  SPRING_PROFILES_ACTIVE = "keyless"
+
+  # Set by Fly's proxy and not forwardable by a client, so it cannot be spoofed
+  # to escape a rate-limit bucket the way X-Forwarded-For can.
+  CORPUS_REMOTE_IP_HEADER = "fly-client-ip"
+
+  # On the mounted volume, so a restart does not re-download ~175 MB of models.
+  CORPUS_ONNX_CACHE = "/data/onnx"
+
+  # Shared across machines through Postgres; the in-memory backend would give
+  # each machine its own full budget.
+  CORPUS_RATE_LIMIT_BACKEND = "postgres"
+
+  # Chat is unavailable here anyway, but leaving quotas on means the demo behaves
+  # exactly like a funded deployment - including /api/usage.
+  CORPUS_QUOTA_ENABLED = "true"
+
+  # 70% of 2048 MB. Both ONNX models live inside this.
+  JAVA_TOOL_OPTIONS = "-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+
+  # One machine always warm. A JVM loading two ONNX models is not something a
+  # reviewer should wait for, and scale-to-zero would make the first click take
+  # 60+ seconds.
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 1
+
+  # SSE streams must not be counted as idle connections.
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 40
+    hard_limit = 80
+
+  [[http_service.checks]]
+    # The readiness group, matching the actuator health group exactly: the
+    # database is required to serve anything.
+    path = "/actuator/health/readiness"
+    method = "GET"
+    interval = "15s"
+    timeout = "5s"
+    # First boot loads two ONNX models from the volume; without the grace period
+    # a cold start looks like a failing deploy.
+    grace_period = "90s"
+
+[[vm]]
+  size = "shared-cpu-2x"
+  # 2048 MB, matching the container limit measured at 1.34 GB under load with
+  # both models resident.
+  memory = "2gb"
+
+[[mounts]]
+  source = "corpus_data"
+  destination = "/data"
+  initial_size = "3gb"
+
+[deploy]
+  # Flyway migrations are idempotent and run at startup on every machine; the
+  # rolling strategy plus ownership-scoped ingestion sweeps (ADR 0008) means an
+  # interrupted deploy cannot corrupt in-flight documents.
+  strategy = "rolling"
+
+# Must be >= spring.lifecycle.timeout-per-shutdown-phase (45s), which is itself
+# above the 30s ingestion drain. Lower this and SIGKILL lands mid-drain.
+kill_signal = "SIGTERM"
+kill_timeout = "60s"

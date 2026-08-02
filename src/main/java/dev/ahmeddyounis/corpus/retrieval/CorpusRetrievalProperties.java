@@ -8,5 +8,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * {@code candidateK} is how many candidates each leg contributes before fusion.
  */
 @ConfigurationProperties(prefix = "corpus.retrieval")
-public record CorpusRetrievalProperties(int topK, int rrfK, int candidateK) {
+public record CorpusRetrievalProperties(int topK, int rrfK, int candidateK, int maxTopK) {
+
+    public CorpusRetrievalProperties {
+        maxTopK = maxTopK > 0 ? maxTopK : 20;
+    }
 }

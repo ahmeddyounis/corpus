@@ -56,4 +56,21 @@ class SchemaIntegrationTest extends AbstractIntegrationTest {
         assertThat(indexes).contains(
                 "idx_vector_store_embedding", "idx_vector_store_tsv", "idx_vector_store_metadata");
     }
+
+    @Test
+    void documentOwnershipColumnsAndUniqueFilenameIndexExist() {
+        List<String> columns = jdbc.sql("""
+                        SELECT column_name FROM information_schema.columns
+                        WHERE table_name = 'documents'
+                        """)
+                .query(String.class)
+                .list();
+        assertThat(columns).contains("owner_instance", "claimed_at");
+
+        List<String> indexes = jdbc.sql(
+                        "SELECT indexname FROM pg_indexes WHERE tablename = 'documents'")
+                .query(String.class)
+                .list();
+        assertThat(indexes).contains("uq_documents_user_filename", "idx_documents_inflight");
+    }
 }

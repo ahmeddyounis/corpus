@@ -1,0 +1,16 @@
+{{- if .Values.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "corpus.fullname" . }}
+  labels:
+    {{- include "corpus.labels" . | nindent 4 }}
+    {{- with .Values.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  # Rendered from files/alerts.yml - the same file docker-compose mounts into
+  # Prometheus, so both environments alert on identical expressions and CI's
+  # `promtool check rules` covers this manifest too.
+{{ .Files.Get "files/alerts.yml" | indent 2 }}
+{{- end }}

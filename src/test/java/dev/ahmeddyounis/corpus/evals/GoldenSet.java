@@ -10,7 +10,13 @@ import org.yaml.snakeyaml.Yaml;
 /** Loads {@code evals/golden-set.yaml} (project root) for the eval tests. */
 public final class GoldenSet {
 
-    public record GoldenCase(String id, String question, List<String> expectedSources, String referenceAnswer) {
+    public record GoldenCase(String id, String question, List<String> expectedSources,
+                             List<String> relatedSources, List<String> tags, String referenceAnswer) {
+
+        public GoldenCase {
+            relatedSources = relatedSources != null ? relatedSources : List.of();
+            tags = tags != null ? tags : List.of();
+        }
     }
 
     private GoldenSet() {
@@ -27,6 +33,8 @@ public final class GoldenSet {
                             (String) c.get("id"),
                             (String) c.get("question"),
                             (List<String>) c.get("expected_sources"),
+                            (List<String>) c.get("related_sources"),
+                            (List<String>) c.get("tags"),
                             (String) c.get("reference_answer")))
                     .toList();
         } catch (Exception e) {

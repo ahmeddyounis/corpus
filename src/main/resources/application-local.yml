@@ -26,3 +26,9 @@ corpus:
   mcp:
     # Anonymous MCP calls (e.g. Claude Desktop without headers) act as demo.
     anonymous-user: demo
+
+  quota:
+    # Ollama runs locally, so tokens cost nothing; the ceiling only exists to
+    # keep a runaway loop from filling the usage table.
+    daily-tokens: ${CORPUS_DAILY_TOKENS:5000000}
+    daily-cost-usd: ${CORPUS_DAILY_COST_USD:1000.0}

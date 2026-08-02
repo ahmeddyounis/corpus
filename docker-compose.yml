@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: corpus
       POSTGRES_DB: corpus
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -54,6 +54,28 @@ services:
       CORPUS_CHAT_MODEL: ${CORPUS_CHAT_MODEL:-qwen3:4b}
       CORPUS_EMBEDDING_MODEL: ${CORPUS_EMBEDDING_MODEL:-nomic-embed-text}
       CORPUS_JWT_SECRET: ${CORPUS_JWT_SECRET:-corpus-local-dev-secret-0123456789-abcdefghijklmnop}
+      # Tracing stays off unless asked for; with the monitoring profile up,
+      # CORPUS_TRACING_ENABLED=true sends spans to Jaeger.
+      CORPUS_TRACING_ENABLED: ${CORPUS_TRACING_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+      CORPUS_ONNX_CACHE: /var/cache/corpus-onnx
+    read_only: true
+    tmpfs:
+      # exec is required: ONNX Runtime extracts its native library to /tmp and
+      # System.load()s it, which a default (noexec) tmpfs refuses to map.
+      - /tmp:exec,mode=1777
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      # Survives restarts, so the embedding model is downloaded once.
+      - onnx-cache:/var/cache/corpus-onnx
+    deploy:
+      resources:
+        limits:
+          # 2g, matching the Helm chart. Measured at 1.34g under load with both
+          # ONNX models resident (embedding + cross-encoder) - 1.5g left only
+          # 10% headroom, which is not a margin.
+          memory: 2g
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,20 +92,29 @@ services:
     image: prom/prometheus:latest
     profiles: [monitoring]
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # One canonical alert file, two consumers: mounted here, and rendered into
+      # a PrometheusRule by the Helm chart. Duplicating it would guarantee drift.
+      - ./deploy/helm/corpus/files/alerts.yml:/etc/prometheus/alerts.yml:ro
+
+  # OTLP-native with a built-in UI, so no separate collector is needed.
+  jaeger:
+    image: jaegertracing/jaeger:latest
+    profiles: [monitoring]
+    ports:
+      - "127.0.0.1:16686:16686"
+      - "127.0.0.1:4318:4318"
 
   grafana:
     image: grafana/grafana:latest
     profiles: [monitoring]
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     environment:
       GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_AUTH_ANONYMOUS_ENABLED: "true"
-      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
     volumes:
       - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./docs/grafana-dashboard.json:/var/lib/grafana/dashboards/corpus.json:ro
@@ -91,3 +122,4 @@ services:
 volumes:
   pgdata:
   ollama-models:
+  onnx-cache:

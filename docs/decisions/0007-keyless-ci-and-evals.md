@@ -18,8 +18,18 @@ Two eval tiers with different determinism/cost trade-offs:
    in-process ONNX `all-MiniLM-L6-v2` embedding model
    (`spring.ai.model.embedding=transformers`, 384-dim) and a deterministic
    `StubChatModel` (`@Primary` in tests) for chat plumbing. The golden set
-   gates recall@5 ≥ 0.85 and MRR ≥ 0.70; JaCoCo gates 80% line coverage on
-   core packages.
+   gates recall@3 ≥ 0.82, recall@5 ≥ 0.88, MRR ≥ 0.74 and nDCG@5 ≥ 0.76;
+   JaCoCo gates 80% line coverage on core packages.
+
+   Gate values are set from a measured run minus a stated 0.05 margin, and the
+   corpus includes distractor documents so the metrics do not saturate — a
+   harness that always scores 1.000 cannot demonstrate an improvement or catch
+   a regression.
+
+   Every case runs twice, with reranking off and on ([ADR 0010](0010-cross-encoder-reranking.md)),
+   and the build additionally asserts non-regression against the fusion-only head
+   on the same run. The absolute gates above were measured from that head, so a
+   reranker that made ordering worse would still clear them.
 2. **Nightly (real model):** `./gradlew nightlyEval` answers the golden set
    with a real Anthropic model (the stub is disabled under the `nightly`
    profile) and an LLM judge scores faithfulness and relevance, both gated

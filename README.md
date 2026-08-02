@@ -17,7 +17,7 @@ Corpus lets a user upload documents (PDF, Markdown, DOCX, TXT), then ask questio
 Three things make it more than a tutorial RAG app:
 
 1. **It is an MCP server.** Any MCP-compatible client (Claude Desktop, IDE agents, other LLM apps) can connect to Corpus over streamable HTTP and use `search_documents` / `ask_documents` / `list_documents` as native tools — turning your document store into part of the agentic AI ecosystem. Setup guide: [docs/mcp-setup.md](docs/mcp-setup.md).
-2. **It measures itself.** A built-in evaluation harness scores retrieval quality (recall@5, MRR) and answer faithfulness against a golden dataset, and fails CI if quality regresses. Current numbers on the seeded corpus: **recall@5 = 1.000, MRR = 0.854**. Token usage and estimated cost are tracked per request via Micrometer.
+2. **It measures itself.** A built-in evaluation harness scores retrieval quality (recall@k, MRR, nDCG) and answer faithfulness against a golden dataset, and fails CI if quality regresses. Every case runs with reranking off and on, so the improvement is a measured delta: on the distractor-hardened corpus, cross-encoder reranking takes **recall@1 from 0.688 to 0.813 and MRR from 0.792 to 0.883**. Token usage and estimated cost are tracked per request via Micrometer.
 3. **It runs anywhere, keyless.** The `local` profile uses Ollama for chat and embeddings, so anyone can clone the repo and run the full stack with `docker compose up` — no API key required. The `cloud` profile switches to Anthropic or OpenAI with zero code changes. CI runs entirely keyless on an in-process ONNX embedding model and a deterministic stub chat model.
 
 ## If you're reviewing this repo, start here
@@ -27,6 +27,8 @@ Three things make it more than a tutorial RAG app:
 - 🔍 **Hybrid search + RRF** — [`retrieval/RetrievalService.java`](src/main/java/dev/ahmeddyounis/corpus/retrieval/RetrievalService.java), [`retrieval/RrfFuser.java`](src/main/java/dev/ahmeddyounis/corpus/retrieval/RrfFuser.java)
 - 📈 **Token & cost metrics** — [`ops/RagMetrics.java`](src/main/java/dev/ahmeddyounis/corpus/ops/RagMetrics.java), `/actuator/prometheus`, [Grafana dashboard](docs/grafana-dashboard.json)
 - 📐 **Design decisions (ADRs)** — [docs/decisions/](docs/decisions/)
+- 🌐 **Live demo** — `https://corpus-demo.fly.dev` — upload, hybrid search, reranking, and MCP with no signup; chat is a documented 503 because the demo runs keyless on purpose ([why](deploy/fly/README.md))
+- ☸️ **Deployment** — [Helm chart](deploy/helm/corpus/) with probes matching the actuator health groups, PDB, NetworkPolicy, and a `PrometheusRule` rendered from the same alert file compose uses; `helm lint` + `kubeconform -strict` run in CI
 
 ---
 
@@ -34,14 +36,17 @@ Three things make it more than a tutorial RAG app:
 
 - **Document ingestion pipeline** — upload → parse (Apache Tika) → token-aware chunking with overlap → batch embedding → pgvector storage with HNSW index
 - **Hybrid retrieval** — PostgreSQL full-text search (`tsvector`) + cosine similarity over embeddings, merged with Reciprocal Rank Fusion for better recall than either alone
+- **Cross-encoder reranking** — an in-process ONNX `ms-marco-MiniLM-L-6-v2` second stage scores each (query, passage) pair directly, the signal RRF structurally cannot see; keyless, fail-open, and A/B-able per request
 - **Conversational RAG chat** — Spring AI `ChatClient` with a memory advisor, per-conversation JDBC-backed history, and **SSE token streaming** to the client
 - **Inline citations** — every answer references the chunk IDs and source documents it drew from (`citations` SSE event; `[n]` markers in answers)
 - **MCP server** — exposes `search_documents`, `ask_documents`, and `list_documents` tools over streamable HTTP at `/mcp`
 - **Agentic tool calling** — the chat model can invoke an internal document-metadata tool (Spring AI function calling with user-scoped `ToolContext`)
 - **Provider-agnostic models** — swap Anthropic ↔ OpenAI ↔ Ollama through configuration only
+- **Embedding cache** — content-addressed, two-tier (in-process LRU + Postgres), keyed by `provider:model:dimension` so a model swap structurally cannot serve stale vectors
+- **Semantic response cache** — per-user, pgvector-backed, invalidated by a corpus-version stamp; its similarity threshold is *measured* against 461 question pairs rather than guessed
 - **Evaluation harness** — golden Q&A set, retrieval metrics (recall@5, MRR), LLM-as-judge faithfulness scoring, wired into CI
 - **LLM observability** — Micrometer metrics for token usage, per-phase latency, and estimated cost per request; Prometheus endpoint; pre-built Grafana dashboard
-- **Security** — stateless JWT auth (Spring Security), per-user document scoping enforced at the storage layer, request rate limiting (Bucket4j)
+- **Security** — stateless JWT auth (Spring Security), per-user document scoping enforced at the storage layer, request rate limiting (Bucket4j), and daily per-user token/cost quotas so a public demo cannot drain a budget
 - **Production hygiene** — Testcontainers integration tests (95% line coverage on core packages, 80% gate), GitHub Actions CI, docker-compose one-command startup, virtual threads enabled
 
 ---
@@ -58,7 +63,7 @@ flowchart LR
         API[REST API<br/>SSE streaming]
         MCPS[MCP server<br/>tool endpoints]
         ING[Ingestion service<br/>parse → chunk → embed]
-        RET[Retrieval service<br/>hybrid search + RRF]
+        RET[Retrieval service<br/>hybrid search + RRF<br/>+ cross-encoder rerank]
         CHAT[Chat service<br/>RAG prompt + tool calling]
         OPS[Ops<br/>metrics · evals]
     end
@@ -125,10 +130,12 @@ flowchart LR
 | `POST` | `/api/auth/token` | Issue a JWT (demo `demo`/`demo` seeded in keyless profiles) |
 | `GET` | `/api/auth/me` | The authenticated user |
 | `POST` | `/api/documents` | Upload a document (multipart `file`); triggers async ingestion, returns 202 |
-| `GET` | `/api/documents` | List the caller's documents + ingestion status |
+| `GET` | `/api/documents` | List the caller's documents + ingestion status (paginated: `?page=&size=`, max 100) |
 | `DELETE` | `/api/documents/{id}` | Remove a document and its chunks/embeddings |
-| `POST` | `/api/search` | Retrieval only — ranked chunks with RRF/vector/FTS scores (debug/inspection) |
+| `POST` | `/api/search` | Retrieval only — ranked chunks with RRF/vector/FTS/rerank scores; `rerank: true\|false` A/Bs ranking per request |
 | `POST` | `/api/chat` | Ask a question; **SSE stream**: `token`* → `citations` → `usage` → `done` |
+| `GET` | `/api/conversations` | List the caller's conversations, newest first (paginated) |
+| `GET` | `/api/usage` | Today's token/cost spend for the caller and the limits in force |
 | `GET` | `/api/conversations/{id}` | Conversation metadata + message history |
 | `GET` | `/actuator/health` \| `/actuator/prometheus` | Health & metrics |
 
@@ -209,6 +216,19 @@ curl -N -X POST localhost:8080/api/chat \
 | `CORPUS_JWT_SECRET` | dev value | HMAC secret for JWT (≥32 bytes; override outside dev) |
 | `CORPUS_RATE_LIMIT_RPM` | `30` | Per-user requests/minute |
 | `CORPUS_TOKEN_RATE_LIMIT_RPM` | `10` | Per-IP attempts/minute on `/api/auth/token` |
+| `CORPUS_RATE_LIMIT_BACKEND` | `memory` (deployed: `postgres`) | `postgres` shares budgets across replicas |
+| `CORPUS_MAX_TOP_K` | `20` | Hard ceiling on retrieved chunks (covers MCP tool calls) |
+| `CORPUS_RERANK_ENABLED` | `true` | Second-stage cross-encoder reranking; `/api/search`'s `rerank` flag overrides per request |
+| `CORPUS_RERANK_CONCURRENCY` | `2` | Concurrent rerank inferences; also sets ONNX intra-op threads (`cores / concurrency`) |
+| `CORPUS_EMBEDDING_CACHE_ENABLED` | `true` | Content-addressed embedding cache (in-process + Postgres) |
+| `CORPUS_EMBEDDING_CACHE_L1` / `_L2` | `10000` / `100000` | Cache entries per replica / per namespace in Postgres |
+| `CORPUS_RESPONSE_CACHE_ENABLED` | `true` | Per-user semantic answer cache |
+| `CORPUS_RESPONSE_CACHE_THRESHOLD` | `0.72` | Cosine similarity for "same question" — measured, see ADR 0012 |
+| `CORPUS_QUOTA_ENABLED` | `true` | Enforce daily token/cost ceilings (kill switch) |
+| `CORPUS_DAILY_TOKENS` / `_COST_USD` | `1000000` / `5.0` | Per-user daily budget; `user_quotas` overrides per user |
+| `CORPUS_DB_POOL_SIZE` | `10` | Hikari max pool size; `replicas x this` must fit the DB connection cap |
+| `CORPUS_INGESTION_CONCURRENCY` | `4` | Concurrent ingestions before load shedding (503) |
+| `CORPUS_RESILIENCE_ENABLED` | `true` | Circuit breakers around chat/embedding calls |
 
 ### Embedding dimension matrix
 
@@ -225,16 +245,25 @@ The embedding dimension is baked into the `vector_store` schema. **Switching emb
 
 ## Evaluation harness
 
-Quality is a feature. Corpus ships with [`evals/golden-set.yaml`](evals/golden-set.yaml) — 16 question → expected-source → reference-answer cases over the seeded sample documents, one keyword-flavored and one paraphrase question per document (so each retrieval leg is exercised).
+Quality is a feature. Corpus ships with [`evals/golden-set.yaml`](evals/golden-set.yaml) — 32 question → expected-source → reference-answer cases over the seeded sample documents. Six of the 14 documents are deliberate **distractors** that share vocabulary with a real source but answer a different question, and the 14 cases tagged `hard` are the ones whose keywords appear in both. Without them the metrics saturate at 1.000 and no ranking change can be measured.
 
-| Metric | What it measures | Gate | Current |
-|---|---|---|---|
-| `recall@5` | Did retrieval surface the correct source in the top 5? | ≥ 0.85 | **1.000** |
-| `MRR` | How high does the correct source rank? | ≥ 0.70 | **0.854** |
-| Faithfulness (LLM-as-judge) | Is the answer grounded in retrieved context? | ≥ 0.80 | nightly |
-| Answer relevance (LLM-as-judge) | Does the answer address the question? | ≥ 0.80 | nightly |
+Every case runs **twice, with reranking off and on**, so the cross-encoder's effect is a measured delta in the build output rather than a claim:
 
-- **Retrieval metrics run on every PR** (`./gradlew test`) using the in-process ONNX embedding model — deterministic and keyless, with a per-case report in the test output.
+| Metric | What it measures | Gate | RRF only | + rerank | Δ |
+|---|---|---|---|---|---|
+| `recall@1` | Correct source ranked first | — | 0.688 | **0.813** | +0.125 |
+| `recall@3` | Correct source in the top 3 | ≥ 0.82 | 0.875 | **0.938** | +0.063 |
+| `recall@5` | Correct source in the top 5 | ≥ 0.88 | 0.938 | **0.969** | +0.031 |
+| `MRR` | How high the correct source ranks | ≥ 0.74 | 0.792 | **0.883** | +0.091 |
+| `nDCG@5` | Ordering quality within the window | ≥ 0.76 | 0.814 | **0.879** | +0.065 |
+| Faithfulness (LLM-as-judge) | Is the answer grounded in retrieved context? | ≥ 0.80 | nightly | | |
+| Answer relevance (LLM-as-judge) | Does the answer address the question? | ≥ 0.80 | nightly | | |
+
+On the 14 `hard` cases the gap is wider still — recall@1 0.643 → 0.786, recall@3 0.929 → **1.000** — which is what you would expect if the distractors are doing their job. The cost is **+231 ms per query** (3.8 ms → 235 ms on 14 cores), paid on a path whose downstream LLM call takes seconds; `CORPUS_RERANK_ENABLED=false` turns it off. [ADR 0010](docs/decisions/0010-cross-encoder-reranking.md) records the tuning runs, including two settings that looked like free wins and were not.
+
+Gates are set to a measured value minus a 0.05 margin, never aspirationally, and reranking additionally has to beat the fusion-only head on the *same run* — an absolute gate alone would let a reranker that quietly made ordering worse still pass, since those gates were set from the fusion-only baseline.
+
+- **Retrieval metrics run on every PR** (`./gradlew test`) using the in-process ONNX models — deterministic and keyless, with a per-case report and rank-movement table in the test output.
 - **Judge-based metrics run nightly** (`./gradlew nightlyEval` with `ANTHROPIC_API_KEY`; the scheduled workflow publishes the JSON report to the run summary and fails on threshold breach).
 
 This turns "the bot seems fine" into a tracked, enforced quality bar — and gives you before/after numbers when you tune chunking, k, or prompts. Methodology: [ADR 0007](docs/decisions/0007-keyless-ci-and-evals.md).
@@ -246,7 +275,11 @@ This turns "the bot seems fine" into a tracked, enforced quality bar — and giv
 - **Token & cost tracking** — per-request usage from Spring AI metadata → `corpus_llm_tokens_total{direction,model,provider}` and `corpus_llm_cost_estimate_usd_total` via a configurable price table (`corpus.pricing.models.*`).
 - **Latency** — `corpus_rag_phase_seconds` histogram timers per phase: `embedding`, `retrieval`, `first_token`, `full_response`.
 - **Retrieval quality signals** — `corpus_retrieval_top_score` and `corpus_retrieval_score_spread` gauges to spot degraded retrieval in production.
+- **Rerank health** — `corpus_retrieval_rerank_seconds` (tagged by `reranker`) and `corpus_rerank_failures_total{reason}`; a rising `reason="shed"` or `"timeout"` means reranking is silently degrading to fusion order under load.
+- **Cache effectiveness** — `corpus_embedding_cache_total{result,tier}` and `corpus_response_cache_total{result}` give hit ratios per tier, so the saving is measured rather than assumed; a cache hit reports zero tokens and zero cost, because none were spent.
+- **Ingestion backlog** — `corpus_ingestion_pending_documents`, the production check that the stale-ingestion sweeper is actually reclaiming stranded documents.
 - Exposed via `/actuator/prometheus`; `docker compose --profile monitoring up` adds Prometheus + a provisioned Grafana dashboard ([docs/grafana-dashboard.json](docs/grafana-dashboard.json)).
+- **SLOs and alerting** — four objectives in [docs/slo.md](docs/slo.md), multi-window multi-burn-rate error-budget alerts in [alerts.yml](deploy/helm/corpus/files/alerts.yml) (one canonical file consumed by both compose and the Helm chart, validated by `promtool check rules` in CI), and a [runbook](docs/runbook.md) section per alert reachable from its `runbook_url`.
 
 ---
 
@@ -257,7 +290,7 @@ This turns "the bot seems fine" into a tracked, enforced quality bar — and giv
 | Unit | Chunker windows/overlap, RRF fusion, bucket semantics | JUnit 5 |
 | Integration | Ingestion → retrieval → chat round-trips against **real Postgres+pgvector** | Testcontainers, ONNX embeddings, stub chat model |
 | Contract | REST + SSE event framing, MCP JSON-RPC handshake + tool calls, per-user scoping | Raw JDK HttpClient assertions |
-| Eval (PR) | recall@5, MRR on the golden set | Deterministic, keyless |
+| Eval (PR) | recall@k, MRR, nDCG@5 on the golden set, with and without reranking | Deterministic, keyless |
 | Eval (nightly) | Faithfulness & relevance, judge-scored | Real model via secret |
 
 Coverage gate via JaCoCo: ≥ 80% line coverage on `ingestion`/`retrieval`/`chat`/`security` (currently ~95%).

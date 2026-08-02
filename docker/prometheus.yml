@@ -1,8 +1,19 @@
 global:
   scrape_interval: 15s
 
+# The canonical rules live with the Helm chart and are mounted here, so compose
+# and Kubernetes alert on exactly the same expressions. `promtool check rules`
+# runs in CI against the same file.
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   - job_name: corpus
     metrics_path: /actuator/prometheus
-    static_configs:
-      - targets: ["app:8080"]
+    # DNS service discovery rather than a single static target, so
+    # `docker compose up --scale app=N` scrapes every replica separately
+    # instead of round-robining one label across them.
+    dns_sd_configs:
+      - names: ["app"]
+        type: A
+        port: 8080

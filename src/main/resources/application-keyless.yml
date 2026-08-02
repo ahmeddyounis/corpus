@@ -7,6 +7,12 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:corpus}
     password: ${SPRING_DATASOURCE_PASSWORD:corpus}
   ai:
+    mcp:
+      server:
+        # Stateless: no per-JVM session map, so any replica answers any call and no
+        # sticky sessions are required. All three Corpus tools are request/response,
+        # so the server-initiated notifications this gives up are unused.
+        protocol: STATELESS
     model:
       chat: none
       embedding: transformers
@@ -16,7 +22,33 @@ spring:
           directory: ${CORPUS_ONNX_CACHE:/tmp/corpus-onnx}
 
 corpus:
+  rate-limit:
+    # Multiple replicas share one budget per user.
+    backend: ${CORPUS_RATE_LIMIT_BACKEND:postgres}
   embedding:
     dimension: 384
   mcp:
     anonymous-user: demo
+
+server:
+  # Behind a proxy (Fly, Render, a k8s ingress) getRemoteAddr() returns the
+  # proxy's address, which would collapse every anonymous caller into one
+  # rate-limit bucket. RemoteIpValve rewrites it from the forwarded header, and
+  # only when the immediate peer is a trusted proxy, so a client cannot forge it.
+  forward-headers-strategy: NATIVE
+  tomcat:
+    remoteip:
+      remote-ip-header: ${CORPUS_REMOTE_IP_HEADER:x-forwarded-for}
+      protocol-header: x-forwarded-proto
+
+logging:
+  structured:
+    format:
+      # Boot's built-in ECS encoder: no logback XML, nothing to drift on upgrade.
+      console: ecs
+    json:
+      context:
+        # Puts requestId/clientIp (and trace ids once tracing is on) in the payload.
+        include: true
+  level:
+    dev.ahmeddyounis.corpus: INFO

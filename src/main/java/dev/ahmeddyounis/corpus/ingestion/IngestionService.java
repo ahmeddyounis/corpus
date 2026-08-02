@@ -1,5 +1,8 @@
 package dev.ahmeddyounis.corpus.ingestion;
 
+import dev.ahmeddyounis.corpus.ops.InstanceIdentity;
+import dev.ahmeddyounis.corpus.chat.CorpusVersionDao;
+import dev.ahmeddyounis.corpus.ops.ModelResilience;
 import dev.ahmeddyounis.corpus.ops.RagMetrics;
 import java.io.ByteArrayInputStream;
 import java.util.List;
@@ -7,18 +10,21 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.VectorStore;
-import org.springframework.ai.vectorstore.filter.Filter;
-import org.springframework.ai.vectorstore.filter.FilterExpressionBuilder;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.stereotype.Service;
 
 /**
  * Upload → (async, virtual thread) parse → chunk → embed+store → status update.
  * Chunks land in the Spring AI vector store with user/document metadata for scoping.
+ *
+ * <p>Every status transition is compare-and-set guarded on this instance's ownership,
+ * so a document reclaimed or deleted mid-ingestion is never silently resurrected —
+ * the chunks written for it are discarded instead.
  */
 @Service
 public class IngestionService {
@@ -28,20 +34,33 @@ public class IngestionService {
     private static final Logger log = LoggerFactory.getLogger(IngestionService.class);
 
     private final DocumentRepository documents;
+    private final DocumentLifecycleDao lifecycle;
     private final TikaTextExtractor extractor;
     private final TokenChunker chunker;
     private final VectorStore vectorStore;
-    private final ExecutorService ingestionExecutor;
+    private final ChunkStore chunkStore;
+    private final AsyncTaskExecutor ingestionExecutor;
     private final RagMetrics metrics;
+    private final CorpusVersionDao corpusVersions;
+    private final InstanceIdentity instance;
+    private final ModelResilience resilience;
 
-    public IngestionService(DocumentRepository documents, TikaTextExtractor extractor, TokenChunker chunker,
-                            VectorStore vectorStore, ExecutorService ingestionExecutor, RagMetrics metrics) {
+    public IngestionService(DocumentRepository documents, DocumentLifecycleDao lifecycle,
+                            TikaTextExtractor extractor, TokenChunker chunker, VectorStore vectorStore,
+                            ChunkStore chunkStore, AsyncTaskExecutor ingestionExecutor, RagMetrics metrics,
+                            CorpusVersionDao corpusVersions,
+                            InstanceIdentity instance, ModelResilience resilience) {
         this.documents = documents;
+        this.lifecycle = lifecycle;
         this.extractor = extractor;
         this.chunker = chunker;
         this.vectorStore = vectorStore;
+        this.chunkStore = chunkStore;
         this.ingestionExecutor = ingestionExecutor;
         this.metrics = metrics;
+        this.corpusVersions = corpusVersions;
+        this.instance = instance;
+        this.resilience = resilience;
     }
 
     public static boolean supported(String filename) {
@@ -51,16 +70,25 @@ public class IngestionService {
     }
 
     public DocumentEntity upload(UUID userId, String filename, String contentType, byte[] bytes) {
-        DocumentEntity saved = documents.save(DocumentEntity.create(userId, filename, contentType, bytes.length));
-        ingestionExecutor.submit(() -> {
-            try {
-                process(saved, bytes);
-            } catch (Throwable t) {
-                // The Future is discarded; without this, task failures (e.g. a status
-                // save racing a concurrent delete) would vanish without a log line.
-                log.error("Ingestion task for document {} failed unexpectedly", saved.id(), t);
-            }
-        });
+        DocumentEntity saved = documents.save(
+                DocumentEntity.create(userId, filename, contentType, bytes.length, instance.id()));
+        try {
+            ingestionExecutor.submit(() -> {
+                try {
+                    process(saved, bytes);
+                } catch (Throwable t) {
+                    // The Future is discarded; without this, task failures would vanish
+                    // without a log line.
+                    log.error("Ingestion task for document {} failed unexpectedly", saved.id(), t);
+                }
+            });
+        } catch (TaskRejectedException e) {
+            // The bulkhead is full. Drop the row we just created rather than leaving
+            // a document that will never be processed, and let the caller retry.
+            documents.deleteById(saved.id());
+            throw new IngestionCapacityException(
+                    "Ingestion is at capacity; retry shortly (concurrency limit reached)");
+        }
         return saved;
     }
 
@@ -68,21 +96,29 @@ public class IngestionService {
         return documents.findByUserIdOrderByCreatedAtDesc(userId);
     }
 
+    public org.springframework.data.domain.Page<DocumentEntity> list(
+            UUID userId, org.springframework.data.domain.Pageable pageable) {
+        return documents.findByUserId(userId, pageable);
+    }
+
     public boolean delete(UUID userId, UUID documentId) {
         return documents.findByIdAndUserId(documentId, userId)
                 .map(doc -> {
-                    deleteChunks(userId, documentId);
+                    chunkStore.deleteFor(userId, documentId);
                     documents.delete(doc);
+                    corpusVersions.bump(userId);
                     return true;
                 })
                 .orElse(false);
     }
 
     void process(DocumentEntity doc, byte[] bytes) {
-        if (!documents.existsById(doc.id())) {
+        String instanceId = instance.id();
+        if (!lifecycle.claim(doc.id(), instanceId)) {
+            log.info("Document {} is no longer claimable (deleted, or taken by another instance); skipping",
+                    doc.id());
             return;
         }
-        DocumentEntity current = documents.save(doc.processing());
         try {
             String text = extractor.extract(new ByteArrayInputStream(bytes), doc.filename());
             List<TokenChunker.Chunk> chunks = chunker.chunk(text);
@@ -100,36 +136,31 @@ public class IngestionService {
                             .build())
                     .toList();
             long embedStart = System.nanoTime();
-            vectorStore.add(aiDocuments);
+            resilience.runEmbedding(() -> vectorStore.add(aiDocuments));
             metrics.recordPhase("embedding", (System.nanoTime() - embedStart) / 1_000_000);
-            if (!documents.existsById(doc.id())) {
-                // Deleted while we were embedding: discard the chunks just written.
-                deleteChunks(doc.userId(), doc.id());
-                log.info("Document {} was deleted during ingestion; discarded {} chunks",
+
+            if (!lifecycle.markReady(doc.id(), chunks.size(), instanceId)) {
+                // Deleted, swept, or reclaimed while we were embedding: the chunks we
+                // just wrote belong to a document that no longer exists in this state.
+                chunkStore.deleteFor(doc.userId(), doc.id());
+                log.warn("Document {} was reclaimed during ingestion; discarded {} chunks",
                         doc.id(), chunks.size());
                 return;
             }
-            documents.save(current.ready(chunks.size()));
+            // The corpus this user's cached answers were computed against no longer
+            // exists. Bumping the stamp makes every prior entry unreachable at once,
+            // including any written while this ingestion was in flight.
+            corpusVersions.bump(doc.userId());
             log.info("Ingested document {} ({} chunks)", doc.filename(), chunks.size());
         } catch (Exception e) {
             log.error("Ingestion failed for document {}: {}", doc.id(), e.getMessage());
             try {
-                deleteChunks(doc.userId(), doc.id());
+                chunkStore.deleteFor(doc.userId(), doc.id());
             } catch (Exception cleanup) {
                 log.warn("Chunk cleanup after failure also failed for {}: {}", doc.id(), cleanup.getMessage());
             }
-            if (documents.existsById(doc.id())) {
-                documents.save(current.failed(truncate(e.getMessage())));
-            }
+            lifecycle.markFailed(doc.id(), truncate(e.getMessage()), instanceId);
         }
-    }
-
-    private void deleteChunks(UUID userId, UUID documentId) {
-        FilterExpressionBuilder b = new FilterExpressionBuilder();
-        Filter.Expression expression = b.and(
-                b.eq("user_id", userId.toString()),
-                b.eq("document_id", documentId.toString())).build();
-        vectorStore.delete(expression);
     }
 
     private static String truncate(String message) {
