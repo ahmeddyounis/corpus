@@ -10,6 +10,10 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -49,7 +53,6 @@ public class ChatService {
     }
 
     private static final Logger log = LoggerFactory.getLogger(ChatService.class);
-    private static final long SSE_TIMEOUT_MS = 300_000L;
 
     private final ObjectProvider<ChatClient.Builder> chatClientBuilder;
     private final ChatMemory chatMemory;
@@ -61,6 +64,8 @@ public class ChatService {
     private final RagMetrics metrics;
     private final CostEstimator costEstimator;
     private final ModelResilience resilience;
+    private final CorpusChatProperties chatProperties;
+    private final ScheduledExecutorService heartbeatScheduler;
     private final String provider;
     private volatile ChatClient chatClient;
 
@@ -74,6 +79,8 @@ public class ChatService {
                        RagMetrics metrics,
                        CostEstimator costEstimator,
                        ModelResilience resilience,
+                       CorpusChatProperties chatProperties,
+                       @Qualifier("sseHeartbeatScheduler") ScheduledExecutorService heartbeatScheduler,
                        @Value("${spring.ai.model.chat:none}") String provider) {
         this.chatClientBuilder = chatClientBuilder;
         this.chatMemory = chatMemory;
@@ -85,15 +92,59 @@ public class ChatService {
         this.metrics = metrics;
         this.costEstimator = costEstimator;
         this.resilience = resilience;
+        this.chatProperties = chatProperties;
+        this.heartbeatScheduler = heartbeatScheduler;
         this.provider = provider;
     }
 
     public SseEmitter stream(UUID userId, UUID conversationId, String message, Integer topK) {
         ConversationEntity conversation = conversationService.resolve(userId, conversationId, message);
         ChatClient client = client();
-        SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
-        chatExecutor.submit(() -> run(client, userId, conversation, message, topK, emitter));
+        SseEmitter emitter = new SseEmitter(chatProperties.sseTimeout().toMillis());
+        // SseEmitter is not thread-safe and the heartbeat writes from a different
+        // thread than the token loop, so every send goes through one lock.
+        Object sendLock = new Object();
+        AtomicBoolean finished = new AtomicBoolean();
+
+        long interval = chatProperties.heartbeatInterval().toMillis();
+        // Load balancers commonly idle out at 60s; comments keep the connection
+        // alive through a long generation without disturbing the event contract.
+        ScheduledFuture<?> heartbeat = heartbeatScheduler.scheduleAtFixedRate(
+                () -> send(emitter, sendLock, finished, SseEmitter.event().comment("keep-alive")),
+                interval, interval, TimeUnit.MILLISECONDS);
+        Runnable stopHeartbeat = () -> {
+            finished.set(true);
+            heartbeat.cancel(false);
+        };
+        emitter.onCompletion(stopHeartbeat);
+        emitter.onTimeout(stopHeartbeat);
+        emitter.onError(error -> stopHeartbeat.run());
+
+        chatExecutor.submit(() -> {
+            try {
+                run(client, userId, conversation, message, topK, emitter, sendLock, finished);
+            } finally {
+                stopHeartbeat.run();
+            }
+        });
         return emitter;
+    }
+
+    /** Serialized, best-effort send: a dead client must not break the other writer. */
+    private static boolean send(SseEmitter emitter, Object sendLock, AtomicBoolean finished,
+                                SseEmitter.SseEventBuilder event) {
+        synchronized (sendLock) {
+            if (finished.get()) {
+                return false;
+            }
+            try {
+                emitter.send(event);
+                return true;
+            } catch (Exception e) {
+                finished.set(true);
+                return false;
+            }
+        }
     }
 
     /** Non-streaming variant used by the MCP {@code ask_documents} tool. */
@@ -124,7 +175,7 @@ public class ChatService {
     }
 
     private void run(ChatClient client, UUID userId, ConversationEntity conversation, String message,
-                     Integer topK, SseEmitter emitter) {
+                     Integer topK, SseEmitter emitter, Object sendLock, AtomicBoolean finished) {
         long start = System.nanoTime();
         try {
             List<ScoredChunk> chunks = retrievalService.search(userId, message, topK, null);
@@ -160,7 +211,10 @@ public class ChatService {
                             firstTokenMs = elapsedMs(start);
                             metrics.recordPhase("first_token", firstTokenMs);
                         }
-                        emitter.send(SseEmitter.event().name("token").data(Map.of("text", delta)));
+                        if (!send(emitter, sendLock, finished,
+                                SseEmitter.event().name("token").data(Map.of("text", delta)))) {
+                            return; // client gone; try-with-resources cancels the model stream
+                        }
                     }
                     if (response.getMetadata() != null) {
                         Usage candidate = response.getMetadata().getUsage();
@@ -186,24 +240,20 @@ public class ChatService {
             metrics.recordPhase("full_response", totalMs);
             Double cost = usageSeen ? recordUsage(promptTokens, completionTokens, model) : null;
 
-            emitter.send(SseEmitter.event().name("citations").data(citations(chunks)));
-            emitter.send(SseEmitter.event().name("usage").data(new UsageStats(
+            send(emitter, sendLock, finished, SseEmitter.event().name("citations").data(citations(chunks)));
+            send(emitter, sendLock, finished, SseEmitter.event().name("usage").data(new UsageStats(
                     usageSeen ? promptTokens : null,
                     usageSeen ? completionTokens : null,
                     usageSeen ? promptTokens + completionTokens : null,
                     cost,
                     retrievalMs, firstTokenMs, totalMs)));
-            emitter.send(SseEmitter.event().name("done").data(Map.of(
+            send(emitter, sendLock, finished, SseEmitter.event().name("done").data(Map.of(
                     "conversationId", conversation.id().toString())));
             emitter.complete();
         } catch (Exception e) {
             log.error("Chat stream failed for conversation {}: {}", conversation.id(), e.getMessage());
-            try {
-                emitter.send(SseEmitter.event().name("error").data(Map.of(
-                        "message", e.getMessage() == null ? "Chat failed" : e.getMessage())));
-            } catch (Exception ignored) {
-                // Client already gone.
-            }
+            send(emitter, sendLock, finished, SseEmitter.event().name("error").data(Map.of(
+                    "message", e.getMessage() == null ? "Chat failed" : e.getMessage())));
             emitter.complete();
         }
     }

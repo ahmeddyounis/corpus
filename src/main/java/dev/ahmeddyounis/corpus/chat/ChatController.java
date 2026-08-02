@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 @RestController
@@ -44,7 +45,11 @@ public class ChatController {
     @Operation(summary = "Ask a question over your documents; answer streams as SSE "
             + "(token* → citations → usage → done, or error)")
     @PostMapping(value = "/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter chat(@Valid @RequestBody ChatRequestBody body) {
+    public SseEmitter chat(@Valid @RequestBody ChatRequestBody body, HttpServletResponse response) {
+        // nginx buffers proxied responses by default, which would defeat streaming
+        // entirely; no-transform stops CDNs rewriting the body en route.
+        response.setHeader("X-Accel-Buffering", "no");
+        response.setHeader("Cache-Control", "no-cache, no-store, no-transform");
         return chatService.stream(currentUser.id(), body.conversationId(), body.message(), body.topK());
     }
 

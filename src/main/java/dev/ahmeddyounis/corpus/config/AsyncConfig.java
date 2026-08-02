@@ -45,6 +45,16 @@ public class AsyncConfig {
         return base("corpus-chat-", properties.chatTermination(), taskDecorator);
     }
 
+    /** One shared timer for SSE keep-alives; the work per tick is a single write. */
+    @Bean(destroyMethod = "shutdownNow")
+    java.util.concurrent.ScheduledExecutorService sseHeartbeatScheduler() {
+        return java.util.concurrent.Executors.newSingleThreadScheduledExecutor(runnable -> {
+            Thread thread = new Thread(runnable, "corpus-sse-heartbeat");
+            thread.setDaemon(true);
+            return thread;
+        });
+    }
+
     private static SimpleAsyncTaskExecutor base(String threadPrefix, java.time.Duration termination,
                                                 TaskDecorator taskDecorator) {
         SimpleAsyncTaskExecutor executor = new SimpleAsyncTaskExecutor(threadPrefix);

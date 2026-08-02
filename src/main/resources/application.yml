@@ -151,6 +151,11 @@ corpus:
     ingestion-termination: 30s
     chat-termination: 20s
     retrieval-termination: 5s
+  chat:
+    # Below the common 60s load-balancer idle timeout was the old 300s value's
+    # problem; heartbeats keep long answers alive within this bound.
+    sse-timeout: ${CORPUS_SSE_TIMEOUT:120s}
+    heartbeat-interval: ${CORPUS_SSE_HEARTBEAT:15s}
   retrieval:
     top-k: ${CORPUS_RETRIEVAL_TOP_K:6}
     rrf-k: ${CORPUS_RRF_K:60}
