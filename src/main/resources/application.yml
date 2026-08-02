@@ -156,6 +156,16 @@ corpus:
     # problem; heartbeats keep long answers alive within this bound.
     sse-timeout: ${CORPUS_SSE_TIMEOUT:120s}
     heartbeat-interval: ${CORPUS_SSE_HEARTBEAT:15s}
+    response-cache:
+      # Answers quote one user's documents, so entries are never shared across
+      # users - isolation is a mandatory user_id predicate plus an FK. See ADR 0012.
+      enabled: ${CORPUS_RESPONSE_CACHE_ENABLED:true}
+      # Measured by SemanticCacheEvalTest, not guessed; see the reported margin.
+      similarity-threshold: ${CORPUS_RESPONSE_CACHE_THRESHOLD:0.72}
+      # A follow-up turn means nothing without the turns before it, so only
+      # self-contained opening questions are served from cache.
+      first-turn-only: ${CORPUS_RESPONSE_CACHE_FIRST_TURN_ONLY:true}
+      max-entries-per-user: ${CORPUS_RESPONSE_CACHE_MAX:500}
   retrieval:
     top-k: ${CORPUS_RETRIEVAL_TOP_K:6}
     rrf-k: ${CORPUS_RRF_K:60}

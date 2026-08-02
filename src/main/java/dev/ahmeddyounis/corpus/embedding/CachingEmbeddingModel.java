@@ -187,7 +187,8 @@ public class CachingEmbeddingModel implements EmbeddingModel {
                 .register(registry);
     }
 
-    static String sha256(String text) {
+    /** Stable content address; also used to key the response cache. */
+    public static String sha256(String text) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(digest.digest(text.getBytes(StandardCharsets.UTF_8)));

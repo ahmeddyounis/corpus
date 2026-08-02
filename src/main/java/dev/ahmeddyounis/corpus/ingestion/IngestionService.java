@@ -1,6 +1,7 @@
 package dev.ahmeddyounis.corpus.ingestion;
 
 import dev.ahmeddyounis.corpus.ops.InstanceIdentity;
+import dev.ahmeddyounis.corpus.chat.CorpusVersionDao;
 import dev.ahmeddyounis.corpus.ops.ModelResilience;
 import dev.ahmeddyounis.corpus.ops.RagMetrics;
 import java.io.ByteArrayInputStream;
@@ -40,12 +41,14 @@ public class IngestionService {
     private final ChunkStore chunkStore;
     private final AsyncTaskExecutor ingestionExecutor;
     private final RagMetrics metrics;
+    private final CorpusVersionDao corpusVersions;
     private final InstanceIdentity instance;
     private final ModelResilience resilience;
 
     public IngestionService(DocumentRepository documents, DocumentLifecycleDao lifecycle,
                             TikaTextExtractor extractor, TokenChunker chunker, VectorStore vectorStore,
                             ChunkStore chunkStore, AsyncTaskExecutor ingestionExecutor, RagMetrics metrics,
+                            CorpusVersionDao corpusVersions,
                             InstanceIdentity instance, ModelResilience resilience) {
         this.documents = documents;
         this.lifecycle = lifecycle;
@@ -55,6 +58,7 @@ public class IngestionService {
         this.chunkStore = chunkStore;
         this.ingestionExecutor = ingestionExecutor;
         this.metrics = metrics;
+        this.corpusVersions = corpusVersions;
         this.instance = instance;
         this.resilience = resilience;
     }
@@ -102,6 +106,7 @@ public class IngestionService {
                 .map(doc -> {
                     chunkStore.deleteFor(userId, documentId);
                     documents.delete(doc);
+                    corpusVersions.bump(userId);
                     return true;
                 })
                 .orElse(false);
@@ -142,6 +147,10 @@ public class IngestionService {
                         doc.id(), chunks.size());
                 return;
             }
+            // The corpus this user's cached answers were computed against no longer
+            // exists. Bumping the stamp makes every prior entry unreachable at once,
+            // including any written while this ingestion was in flight.
+            corpusVersions.bump(doc.userId());
             log.info("Ingested document {} ({} chunks)", doc.filename(), chunks.size());
         } catch (Exception e) {
             log.error("Ingestion failed for document {}: {}", doc.id(), e.getMessage());

@@ -41,6 +41,7 @@ Three things make it more than a tutorial RAG app:
 - **Agentic tool calling** — the chat model can invoke an internal document-metadata tool (Spring AI function calling with user-scoped `ToolContext`)
 - **Provider-agnostic models** — swap Anthropic ↔ OpenAI ↔ Ollama through configuration only
 - **Embedding cache** — content-addressed, two-tier (in-process LRU + Postgres), keyed by `provider:model:dimension` so a model swap structurally cannot serve stale vectors
+- **Semantic response cache** — per-user, pgvector-backed, invalidated by a corpus-version stamp; its similarity threshold is *measured* against 461 question pairs rather than guessed
 - **Evaluation harness** — golden Q&A set, retrieval metrics (recall@5, MRR), LLM-as-judge faithfulness scoring, wired into CI
 - **LLM observability** — Micrometer metrics for token usage, per-phase latency, and estimated cost per request; Prometheus endpoint; pre-built Grafana dashboard
 - **Security** — stateless JWT auth (Spring Security), per-user document scoping enforced at the storage layer, request rate limiting (Bucket4j)
@@ -218,6 +219,8 @@ curl -N -X POST localhost:8080/api/chat \
 | `CORPUS_RERANK_CONCURRENCY` | `2` | Concurrent rerank inferences; also sets ONNX intra-op threads (`cores / concurrency`) |
 | `CORPUS_EMBEDDING_CACHE_ENABLED` | `true` | Content-addressed embedding cache (in-process + Postgres) |
 | `CORPUS_EMBEDDING_CACHE_L1` / `_L2` | `10000` / `100000` | Cache entries per replica / per namespace in Postgres |
+| `CORPUS_RESPONSE_CACHE_ENABLED` | `true` | Per-user semantic answer cache |
+| `CORPUS_RESPONSE_CACHE_THRESHOLD` | `0.72` | Cosine similarity for "same question" — measured, see ADR 0012 |
 | `CORPUS_DB_POOL_SIZE` | `10` | Hikari max pool size; `replicas x this` must fit the DB connection cap |
 | `CORPUS_INGESTION_CONCURRENCY` | `4` | Concurrent ingestions before load shedding (503) |
 | `CORPUS_RESILIENCE_ENABLED` | `true` | Circuit breakers around chat/embedding calls |
@@ -268,7 +271,7 @@ This turns "the bot seems fine" into a tracked, enforced quality bar — and giv
 - **Latency** — `corpus_rag_phase_seconds` histogram timers per phase: `embedding`, `retrieval`, `first_token`, `full_response`.
 - **Retrieval quality signals** — `corpus_retrieval_top_score` and `corpus_retrieval_score_spread` gauges to spot degraded retrieval in production.
 - **Rerank health** — `corpus_retrieval_rerank_seconds` (tagged by `reranker`) and `corpus_rerank_failures_total{reason}`; a rising `reason="shed"` or `"timeout"` means reranking is silently degrading to fusion order under load.
-- **Cache effectiveness** — `corpus_embedding_cache_total{result,tier}` gives the hit ratio per tier, so the saving is measured rather than assumed.
+- **Cache effectiveness** — `corpus_embedding_cache_total{result,tier}` and `corpus_response_cache_total{result}` give hit ratios per tier, so the saving is measured rather than assumed; a cache hit reports zero tokens and zero cost, because none were spent.
 - Exposed via `/actuator/prometheus`; `docker compose --profile monitoring up` adds Prometheus + a provisioned Grafana dashboard ([docs/grafana-dashboard.json](docs/grafana-dashboard.json)).
 
 ---
