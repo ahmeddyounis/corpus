@@ -1,0 +1,189 @@
+# Corpus alert rules.
+#
+# One canonical file with two consumers: docker-compose mounts it into
+# Prometheus directly, and the Helm chart renders it into a PrometheusRule with
+# .Files.Get. Duplicating it would guarantee the two drift.
+#
+# `promtool check rules` runs in CI, so these are a tested artifact rather than
+# decorative YAML. Every rule carries a runbook_url pointing at the section of
+# docs/runbook.md that says what to do about it - an alert with no documented
+# response is a pager that trains people to ignore it.
+groups:
+  - name: corpus-slo
+    interval: 30s
+    rules:
+      # Multi-window, multi-burn-rate error budget alerting against the 99%
+      # availability objective in docs/slo.md. Two windows per severity: the long
+      # one establishes that the burn is real, the short one that it is still
+      # happening, so a burst that has already stopped does not page anyone.
+      - alert: CorpusErrorBudgetBurnFast
+        expr: |
+          (
+            sum(rate(http_server_requests_seconds_count{status=~"5.."}[1h]))
+              / clamp_min(sum(rate(http_server_requests_seconds_count[1h])), 0.001) > (14.4 * 0.01)
+          )
+          and
+          (
+            sum(rate(http_server_requests_seconds_count{status=~"5.."}[5m]))
+              / clamp_min(sum(rate(http_server_requests_seconds_count[5m])), 0.001) > (14.4 * 0.01)
+          )
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Burning the 30-day error budget 14.4x faster than sustainable"
+          description: "At this rate the entire monthly budget is gone in ~2 days."
+          runbook_url: "https://github.com/ahmeddyounis/corpus/blob/main/docs/runbook.md#corpuserrorbudgetburnfast"
+
+      - alert: CorpusErrorBudgetBurnSlow
+        expr: |
+          (
+            sum(rate(http_server_requests_seconds_count{status=~"5.."}[6h]))
+              / clamp_min(sum(rate(http_server_requests_seconds_count[6h])), 0.001) > (6 * 0.01)
+          )
+          and
+          (
+            sum(rate(http_server_requests_seconds_count{status=~"5.."}[30m]))
+              / clamp_min(sum(rate(http_server_requests_seconds_count[30m])), 0.001) > (6 * 0.01)
+          )
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Sustained error-budget burn at 6x the sustainable rate"
+          runbook_url: "https://github.com/ahmeddyounis/corpus/blob/main/docs/runbook.md#corpuserrorbudgetburnslow"
+
+      - alert: CorpusInstanceDown
+        expr: up{job="corpus"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Corpus replica {{ $labels.instance }} is not being scraped"
+          runbook_url: "https://github.com/ahmeddyounis/corpus/blob/main/docs/runbook.md#corpusinstancedown"
+
+  - name: corpus-latency
+    interval: 30s
+    rules:
+      - alert: CorpusSlowFirstToken
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(corpus_rag_phase_seconds_bucket{phase="first_token"}[10m]))) > 5
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "p95 time-to-first-token above the 5s objective"
+          description: "Users see a spinner before any text. Check provider latency, the
+            circuit breaker, and rerank p95 - reranking sits ahead of the model call."
+          runbook_url: "https://github.com/ahmeddyounis/corpus/blob/main/docs/runbook.md#corpusslowfirsttoken"
+
+      - alert: CorpusSlowRetrieval
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(corpus_rag_phase_seconds_bucket{phase="retrieval"}[10m]))) > 0.5
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "p95 retrieval latency above the 500ms objective"
+          runbook_url: "https://github.com/ahmeddyounis/corpus/blob/main/docs/runbook.md#corpusslowretrieval"
+
+  - name: corpus-quality
+    interval: 60s
+    rules:
+      # The gauge is NaN on a replica that has served no retrieval, and Micrometer
+      # omits NaN from the exposition - so this fires on genuinely degraded
+      # retrieval rather than on an idle replica. The floor is calibrated from
+      # real output: RRF top scores cluster near 2/61 = 0.0328 when both legs
+      # agree on the top result, and near 1/61 = 0.0164 when only one leg found it.
+      - alert: CorpusRetrievalDegraded
+        expr: |
+          sum(rate(corpus_retrieval_top_score_observed_sum[15m]))
+            / clamp_min(sum(rate(corpus_retrieval_top_score_observed_count[15m])), 0.001) < 0.017
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Fleet-mean RRF top score has fallen to single-leg levels"
+          description: "Answers are being grounded in weak matches. Usually an embedding
+            dimension mismatch, a failed migration, or an empty corpus for active users."
+          runbook_url: "https://github.com/ahmeddyounis/corpus/blob/main/docs/runbook.md#corpusretrievaldegraded"
+
+      # Reranking fails open by design, so without this the only symptom of a
+      # broken reranker is that quality quietly reverts to the fusion baseline.
+      - alert: CorpusRerankingDegraded
+        expr: sum(rate(corpus_rerank_failures_total[10m])) > 0.1
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Reranking is falling back to fusion order ({{ $labels.reason }})"
+          description: "Ranking quality no longer matches the eval numbers. reason=shed or
+            timeout means the bulkhead is saturated; reason=load means the model never
+            started."
+          runbook_url: "https://github.com/ahmeddyounis/corpus/blob/main/docs/runbook.md#corpusrerankingdegraded"
+
+      # The production detector for a regression in forwarded-header handling: if
+      # every caller shares one bucket, everyone gets 429s at once.
+      - alert: CorpusRateLimit429Storm
+        expr: |
+          sum(rate(http_server_requests_seconds_count{status="429"}[5m]))
+            / clamp_min(sum(rate(http_server_requests_seconds_count[5m])), 0.001) > 0.2
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Over 20% of requests are being rate limited"
+          description: "Either a real burst, or every client is being keyed to the same
+            bucket - check that the proxy's forwarded header is still trusted."
+          runbook_url: "https://github.com/ahmeddyounis/corpus/blob/main/docs/runbook.md#corpusratelimit429storm"
+
+  - name: corpus-resources
+    interval: 30s
+    rules:
+      - alert: CorpusCostBurn
+        expr: sum(rate(corpus_llm_cost_estimate_usd_total[1h])) * 3600 > 1
+        for: 30m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Estimated LLM spend above $1/hour"
+          runbook_url: "https://github.com/ahmeddyounis/corpus/blob/main/docs/runbook.md#corpuscostburn"
+
+      # Proves the stale-ingestion sweeper is doing its job in production, not
+      # only in the integration tests.
+      - alert: CorpusIngestionBacklog
+        expr: max(corpus_ingestion_pending_documents) > 20
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Documents have been waiting to ingest for 15 minutes"
+          description: "Either sustained load beyond the ingestion bulkhead, or documents
+            stuck in PROCESSING that the sweeper is not reclaiming."
+          runbook_url: "https://github.com/ahmeddyounis/corpus/blob/main/docs/runbook.md#corpusingestionbacklog"
+
+      - alert: CorpusCircuitBreakerOpen
+        expr: max by (name) (resilience4j_circuitbreaker_state{state="open"}) == 1
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Circuit breaker {{ $labels.name }} is open"
+          description: "Calls are being rejected without reaching the provider. Deliberately
+            NOT part of the readiness group - a shared provider outage would otherwise take
+            every replica out of rotation, including for /api/search, which needs no model."
+          runbook_url: "https://github.com/ahmeddyounis/corpus/blob/main/docs/runbook.md#corpuscircuitbreakeropen"
+
+      - alert: CorpusDbPoolSaturated
+        expr: |
+          sum(hikaricp_connections_active) / clamp_min(sum(hikaricp_connections_max), 1) > 0.9
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Hikari pool over 90% utilised"
+          description: "Requests will start waiting on connection-timeout (3s) and failing.
+            Check replicas x maximumPoolSize against the managed-Postgres connection cap."
+          runbook_url: "https://github.com/ahmeddyounis/corpus/blob/main/docs/runbook.md#corpusdbpoolsaturated"

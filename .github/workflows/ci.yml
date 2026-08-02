@@ -32,6 +32,13 @@ jobs:
       - name: Build, test, evals, coverage gate
         run: ./gradlew build --no-daemon
 
+      # The alert rules are a tested artifact, not decorative YAML.
+      - name: Validate Prometheus alert rules
+        run: |
+          docker run --rm --entrypoint promtool \
+            -v "$PWD/deploy/helm/corpus/files:/rules" \
+            prom/prometheus:v3.1.0 check rules /rules/alerts.yml
+
       - name: Publish eval summary
         if: always()
         run: |

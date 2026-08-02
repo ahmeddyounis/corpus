@@ -275,7 +275,9 @@ This turns "the bot seems fine" into a tracked, enforced quality bar — and giv
 - **Retrieval quality signals** — `corpus_retrieval_top_score` and `corpus_retrieval_score_spread` gauges to spot degraded retrieval in production.
 - **Rerank health** — `corpus_retrieval_rerank_seconds` (tagged by `reranker`) and `corpus_rerank_failures_total{reason}`; a rising `reason="shed"` or `"timeout"` means reranking is silently degrading to fusion order under load.
 - **Cache effectiveness** — `corpus_embedding_cache_total{result,tier}` and `corpus_response_cache_total{result}` give hit ratios per tier, so the saving is measured rather than assumed; a cache hit reports zero tokens and zero cost, because none were spent.
+- **Ingestion backlog** — `corpus_ingestion_pending_documents`, the production check that the stale-ingestion sweeper is actually reclaiming stranded documents.
 - Exposed via `/actuator/prometheus`; `docker compose --profile monitoring up` adds Prometheus + a provisioned Grafana dashboard ([docs/grafana-dashboard.json](docs/grafana-dashboard.json)).
+- **SLOs and alerting** — four objectives in [docs/slo.md](docs/slo.md), multi-window multi-burn-rate error-budget alerts in [alerts.yml](deploy/helm/corpus/files/alerts.yml) (one canonical file consumed by both compose and the Helm chart, validated by `promtool check rules` in CI), and a [runbook](docs/runbook.md) section per alert reachable from its `runbook_url`.
 
 ---
 

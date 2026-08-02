@@ -92,6 +92,9 @@ services:
       - "127.0.0.1:9090:9090"
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # One canonical alert file, two consumers: mounted here, and rendered into
+      # a PrometheusRule by the Helm chart. Duplicating it would guarantee drift.
+      - ./deploy/helm/corpus/files/alerts.yml:/etc/prometheus/alerts.yml:ro
 
   # OTLP-native with a built-in UI, so no separate collector is needed.
   jaeger:
