@@ -199,6 +199,13 @@ corpus:
       secret: ${CORPUS_JWT_SECRET:corpus-local-dev-secret-0123456789-abcdefghijklmnop}
       ttl: 24h
   embedding:
+    cache:
+      # Embeddings are a pure function of (text, provider, model, dimension), so
+      # they are cacheable across users; the namespace carries the model identity
+      # so a swap misses rather than serving stale vectors. See ADR 0011.
+      enabled: ${CORPUS_EMBEDDING_CACHE_ENABLED:true}
+      l1-max-entries: ${CORPUS_EMBEDDING_CACHE_L1:10000}
+      l2-max-entries: ${CORPUS_EMBEDDING_CACHE_L2:100000}
     dimension: 384
   mcp:
     # When set, unauthenticated /mcp calls act as this account (keyless profiles only).
