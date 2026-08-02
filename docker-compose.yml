@@ -72,7 +72,10 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1.5g
+          # 2g, matching the Helm chart. Measured at 1.34g under load with both
+          # ONNX models resident (embedding + cross-encoder) - 1.5g left only
+          # 10% headroom, which is not a margin.
+          memory: 2g
     depends_on:
       postgres:
         condition: service_healthy

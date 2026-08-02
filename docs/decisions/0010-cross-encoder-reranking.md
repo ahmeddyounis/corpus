@@ -89,9 +89,19 @@ heads can be compared against a live index without a redeploy.
   rerank rather than as unbounded queueing behind a busy CPU. ONNX Runtime's
   intra-op thread count is sized against that limit, since it otherwise defaults
   to every core and the concurrent sessions would fight each other.
-- The image and the demo volume carry a second ~90 MB ONNX model. It shares the
-  embedding model's cache directory, so the existing CI cache, container volume,
-  and Fly volume all cover it without new configuration.
+- The image and the demo volume carry a second ~90 MB ONNX model (175 MB of
+  cache with both). It shares the embedding model's cache directory, so the
+  existing CI cache, container volume, and Fly volume all cover it without new
+  configuration. The container memory limit went from 1.5 GB to 2 GB: measured
+  at 1.34 GB under load with both models resident, 1.5 GB left 10% headroom,
+  which is not a margin.
+- **`ai.djl.pytorch:pytorch-engine` is excluded.** It arrives transitively with
+  DJL's tokenizer artifact, and PyTorch is DJL's *default* engine — so the first
+  tokenizer call resolved `Engine.getInstance()` and downloaded ~500 MB of
+  libtorch native libraries at runtime, OOM-killing the container on its first
+  reranked query. Nothing here uses a DJL engine; both models run through
+  `OrtSession` directly. This only surfaced in a container with a realistic
+  memory limit — on a developer machine it looked like a slow first request.
 - `onnxruntime` and `ai.djl.huggingface:tokenizers` are now declared explicitly.
   They resolve transitively through the Spring AI transformers starter today, and
   a transitive drop would otherwise surface only as a runtime failure.

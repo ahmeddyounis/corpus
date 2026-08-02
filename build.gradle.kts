@@ -20,6 +20,18 @@ repositories {
     mavenCentral()
 }
 
+configurations.all {
+    // DJL's tokenizer artifact pulls in the PyTorch engine and model zoo. Both
+    // models here run through ONNX Runtime directly, never a DJL engine - but
+    // PyTorch is DJL's *default* engine, so the first tokenizer call resolves
+    // Engine.getInstance() and downloads ~500 MB of libtorch native libraries at
+    // runtime. That OOM-killed the container under its 1.5 GB limit, on the
+    // first reranked query rather than at startup.
+    exclude(group = "ai.djl.pytorch", module = "pytorch-engine")
+    exclude(group = "ai.djl.pytorch", module = "pytorch-model-zoo")
+    exclude(group = "ai.djl", module = "model-zoo")
+}
+
 dependencies {
     implementation(platform(SpringBootPlugin.BOM_COORDINATES))
     implementation(platform("org.springframework.ai:spring-ai-bom:2.0.0"))

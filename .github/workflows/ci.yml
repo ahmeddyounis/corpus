@@ -82,3 +82,106 @@ jobs:
 
       - name: Build Docker image
         run: docker build -t corpus:${{ github.sha }} .
+
+  # One job that exercises the healthcheck, the probes, the JVM flags, the ONNX
+  # cache volume, and demo seeding together - none of which the JVM test suite
+  # can reach, because they are properties of the image and compose stack rather
+  # than of the code.
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Lint the Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning
+
+      # Deliberately not `docker compose up`: the default compose path runs the
+      # `local` profile, which pulls multi-gigabyte Ollama models. The `keyless`
+      # profile exercises ingestion, retrieval, MCP, and metrics with no
+      # credentials and no model download beyond the cached ONNX ones.
+      - name: Build the image
+        run: docker build -t corpus:ci .
+
+      - name: Run Postgres and the app
+        run: |
+          docker network create corpus-ci
+          docker run -d --name corpus-db --network corpus-ci \
+            -e POSTGRES_DB=corpus -e POSTGRES_USER=corpus -e POSTGRES_PASSWORD=corpus \
+            --health-cmd 'pg_isready -U corpus' --health-interval 5s --health-retries 20 \
+            pgvector/pgvector:pg17
+          for i in $(seq 1 30); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' corpus-db)" = healthy ] && break
+            sleep 2
+          done
+          docker run -d --name corpus-app --network corpus-ci -p 8080:8080 \
+            -e SPRING_PROFILES_ACTIVE=keyless \
+            -e SPRING_DATASOURCE_URL=jdbc:postgresql://corpus-db:5432/corpus \
+            -e SPRING_DATASOURCE_USERNAME=corpus -e SPRING_DATASOURCE_PASSWORD=corpus \
+            -e CORPUS_JWT_SECRET=ci-secret-0123456789-abcdefghijklmnopqrstuvwxyz \
+            --tmpfs /tmp:exec,mode=1777 \
+            corpus:ci
+
+      # Waits on the image's own HEALTHCHECK rather than polling the port, so a
+      # healthcheck that never passes fails the build instead of being ignored.
+      - name: Wait for the container healthcheck
+        run: |
+          for i in $(seq 1 60); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' corpus-app 2>/dev/null || echo starting)
+            echo "attempt $i: $status"
+            [ "$status" = healthy ] && exit 0
+            sleep 5
+          done
+          echo "::error::container never became healthy"
+          docker logs --tail 200 corpus-app
+          exit 1
+
+      - name: Smoke the API end to end
+        run: |
+          set -euo pipefail
+          TOKEN=$(curl -sf -X POST localhost:8080/api/auth/token \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"demo","password":"demo"}' | jq -r .token)
+          test -n "$TOKEN" && test "$TOKEN" != null
+
+          echo "seeded documents:"
+          curl -sf -H "Authorization: Bearer $TOKEN" 'localhost:8080/api/documents?size=100' \
+            | jq -e '.items | length > 0'
+
+          echo "hybrid search with reranking:"
+          curl -sf -X POST localhost:8080/api/search \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"query":"reciprocal rank fusion","topK":3,"rerank":true}' \
+            | jq -e '.results | length > 0 and (.[0].rerankScore != null)'
+
+          echo "usage endpoint:"
+          curl -sf -H "Authorization: Bearer $TOKEN" localhost:8080/api/usage | jq -e '.tokenLimit > 0'
+
+          echo "probes:"
+          curl -sf localhost:8080/actuator/health/readiness | jq -e '.status == "UP"'
+          curl -sf localhost:8080/actuator/health/liveness  | jq -e '.status == "UP"'
+
+          echo "metrics:"
+          curl -sf localhost:8080/actuator/prometheus | grep -q corpus_rag_phase_seconds
+
+          echo "keyless chat returns a self-documenting 503:"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8080/api/chat \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"message":"hello"}')
+          test "$code" = 503
+
+      - name: MCP tools/list over streamable HTTP
+        run: |
+          curl -sf -X POST localhost:8080/mcp \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | tee /dev/stderr | grep -q search_documents
+
+      - name: Container diagnostics
+        if: always()
+        run: |
+          docker logs --tail 150 corpus-app || true
+          docker rm -f corpus-app corpus-db || true
+          docker network rm corpus-ci || true
