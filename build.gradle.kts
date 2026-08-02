@@ -60,7 +60,13 @@ dependencies {
     implementation("io.github.resilience4j:resilience4j-reactor:2.4.0")
     implementation("io.github.resilience4j:resilience4j-micrometer:2.4.0")
 
-    // Observability & API docs
+    // Observability & API docs. Spring AI's chat/embedding/vector-store observation
+    // autoconfigurations are already on the classpath, so adding a tracer yields a
+    // full RAG span waterfall for almost no application code.
+    // Tracing only. The full opentelemetry starter also wires OTel metrics/logs
+    // export, which displaces the Prometheus scrape endpoint.
+    implementation("org.springframework.boot:spring-boot-micrometer-tracing-opentelemetry")
+    implementation("io.opentelemetry:opentelemetry-exporter-otlp")
     runtimeOnly("io.micrometer:micrometer-registry-prometheus")
     implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:3.0.3")
 

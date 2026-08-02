@@ -54,6 +54,10 @@ services:
       CORPUS_CHAT_MODEL: ${CORPUS_CHAT_MODEL:-qwen3:4b}
       CORPUS_EMBEDDING_MODEL: ${CORPUS_EMBEDDING_MODEL:-nomic-embed-text}
       CORPUS_JWT_SECRET: ${CORPUS_JWT_SECRET:-corpus-local-dev-secret-0123456789-abcdefghijklmnop}
+      # Tracing stays off unless asked for; with the monitoring profile up,
+      # CORPUS_TRACING_ENABLED=true sends spans to Jaeger.
+      CORPUS_TRACING_ENABLED: ${CORPUS_TRACING_ENABLED:-false}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318/v1/traces
     depends_on:
       postgres:
         condition: service_healthy
@@ -73,6 +77,14 @@ services:
       - "9090:9090"
     volumes:
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  # OTLP-native with a built-in UI, so no separate collector is needed.
+  jaeger:
+    image: jaegertracing/jaeger:latest
+    profiles: [monitoring]
+    ports:
+      - "127.0.0.1:16686:16686"
+      - "127.0.0.1:4318:4318"
 
   grafana:
     image: grafana/grafana:latest

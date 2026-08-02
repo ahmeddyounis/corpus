@@ -98,6 +98,18 @@ springdoc:
     persist-authorization: true
 
 management:
+  tracing:
+    # Off unless a collector exists, so the default `docker compose up` never
+    # spams export failures. Turn on with CORPUS_TRACING_ENABLED=true.
+    enabled: ${CORPUS_TRACING_ENABLED:false}
+    sampling:
+      probability: ${CORPUS_TRACE_SAMPLE:0.1}
+  opentelemetry:
+    tracing:
+      export:
+        otlp:
+          # Verified property path for Boot 4.1 — not management.otlp.tracing.*.
+          endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318/v1/traces}
   endpoints:
     web:
       exposure:

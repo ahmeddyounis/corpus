@@ -1,6 +1,8 @@
 package dev.ahmeddyounis.corpus.retrieval;
 
 import dev.ahmeddyounis.corpus.ops.ModelResilience;
+import io.micrometer.observation.Observation;
+import io.micrometer.observation.ObservationRegistry;
 import dev.ahmeddyounis.corpus.retrieval.FullTextSearchDao.FtsHit;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -31,17 +33,19 @@ public class RetrievalService {
     private final CorpusRetrievalProperties properties;
     private final AsyncTaskExecutor retrievalExecutor;
     private final ModelResilience resilience;
+    private final ObservationRegistry observations;
 
     public RetrievalService(VectorStore vectorStore, FullTextSearchDao fullTextSearch, RrfFuser fuser,
                             CorpusRetrievalProperties properties,
                             @Qualifier("retrievalExecutor") AsyncTaskExecutor retrievalExecutor,
-                            ModelResilience resilience) {
+                            ModelResilience resilience, ObservationRegistry observations) {
         this.vectorStore = vectorStore;
         this.fullTextSearch = fullTextSearch;
         this.fuser = fuser;
         this.properties = properties;
         this.retrievalExecutor = retrievalExecutor;
         this.resilience = resilience;
+        this.observations = observations;
     }
 
     public List<ScoredChunk> search(UUID userId, String query, Integer topKOverride, List<UUID> documentIds) {
@@ -52,11 +56,19 @@ public class RetrievalService {
         // was an accident of candidateK, not a control.
         int topK = Math.clamp(requested, 1, properties.maxTopK());
 
+        // Named observations so the parallel fan-out renders as two sibling spans
+        // under the request, which is what makes a trace of this pipeline readable.
         CompletableFuture<List<Document>> vectorFuture =
-                CompletableFuture.supplyAsync(() -> vectorSearch(userId, query, candidateK, documentIds),
+                CompletableFuture.supplyAsync(() -> Observation
+                                .createNotStarted("corpus.retrieval.vector", observations)
+                                .lowCardinalityKeyValue("leg", "vector")
+                                .observe(() -> vectorSearch(userId, query, candidateK, documentIds)),
                         retrievalExecutor);
         CompletableFuture<List<FtsHit>> ftsFuture =
-                CompletableFuture.supplyAsync(() -> fullTextSearch.search(userId, query, candidateK, documentIds),
+                CompletableFuture.supplyAsync(() -> Observation
+                                .createNotStarted("corpus.retrieval.fts", observations)
+                                .lowCardinalityKeyValue("leg", "fulltext")
+                                .observe(() -> fullTextSearch.search(userId, query, candidateK, documentIds)),
                         retrievalExecutor);
 
         List<Document> vectorHits = vectorFuture.join();
