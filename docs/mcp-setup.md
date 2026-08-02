@@ -9,6 +9,24 @@ with three tools:
 | `ask_documents` | Full RAG answer with citations |
 | `list_documents` | Uploaded documents with ingestion status and chunk counts |
 
+## 0. Or skip setup entirely: the hosted demo
+
+`https://corpus-demo.fly.dev/mcp` is publicly reachable and needs no
+credentials, so you can paste it into a client and try the tools in about a
+minute. Four facts make leaving it open safe, and they are worth stating
+together rather than relying on any one of them:
+
+1. Anonymous access is **read-only** — uploading requires a JWT.
+2. It is throttled per real client IP, keyed on `Fly-Client-IP`, which Fly's
+   proxy sets and a client cannot forge.
+3. `ask_documents` is **unavailable** there: the demo runs the `keyless` profile
+   with no model API key, so no tool call can spend money. `search_documents`
+   and `list_documents` work fully, reranking included.
+4. The corpus is the bundled sample documents, which are already public in this
+   repository.
+
+Substitute that URL for `http://localhost:8080/mcp` in the configuration below.
+
 ## 1. Start Corpus
 
 ```bash

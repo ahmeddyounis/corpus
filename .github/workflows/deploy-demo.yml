@@ -1,0 +1,86 @@
+name: Deploy demo
+
+on:
+  workflow_run:
+    workflows: [Publish]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-demo
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # Only on a successful publish. Deploying an image whose build failed is how
+    # a green pipeline ships a broken demo.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment:
+      name: demo
+      url: https://corpus-demo.fly.dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: flyctl deploy --config deploy/fly/fly.toml --remote-only --wait-timeout 600
+
+      # What makes this a pipeline rather than a deploy script: a deploy that
+      # completes but serves a broken app is rolled back automatically.
+      - name: Post-deploy smoke test
+        id: smoke
+        run: |
+          set -euo pipefail
+          BASE=https://corpus-demo.fly.dev
+
+          echo "readiness:"
+          for i in $(seq 1 30); do
+            if curl -sf "$BASE/actuator/health/readiness" | jq -e '.status == "UP"'; then break; fi
+            [ "$i" = 30 ] && { echo "::error::never became ready"; exit 1; }
+            sleep 10
+          done
+
+          echo "token:"
+          TOKEN=$(curl -sf -X POST "$BASE/api/auth/token" \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"demo","password":"demo"}' | jq -r .token)
+          test -n "$TOKEN" && test "$TOKEN" != null
+
+          echo "seeded corpus:"
+          curl -sf -H "Authorization: Bearer $TOKEN" "$BASE/api/documents?size=100" \
+            | jq -e '.items | map(select(.status == "READY")) | length > 0'
+
+          echo "reranked search:"
+          curl -sf -X POST "$BASE/api/search" \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"query":"reciprocal rank fusion","topK":3,"rerank":true}' \
+            | jq -e '.reranker == "ms-marco-MiniLM-L-6-v2" and (.results | length > 0)'
+
+          echo "MCP tools/list (anonymous, as a client would):"
+          curl -sf -X POST "$BASE/mcp" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | grep -q search_documents
+
+          echo "chat is 503 under keyless, as designed:"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/api/chat" \
+            -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+            -d '{"message":"hi"}')
+          test "$code" = 503
+
+      - name: Roll back on a failed smoke test
+        if: failure() && steps.smoke.outcome == 'failure'
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          echo "::warning::smoke test failed, rolling back"
+          flyctl releases rollback --config deploy/fly/fly.toml --yes
+          flyctl logs --config deploy/fly/fly.toml --no-tail | tail -100
