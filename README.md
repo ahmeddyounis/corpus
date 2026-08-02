@@ -17,7 +17,7 @@ Corpus lets a user upload documents (PDF, Markdown, DOCX, TXT), then ask questio
 Three things make it more than a tutorial RAG app:
 
 1. **It is an MCP server.** Any MCP-compatible client (Claude Desktop, IDE agents, other LLM apps) can connect to Corpus over streamable HTTP and use `search_documents` / `ask_documents` / `list_documents` as native tools — turning your document store into part of the agentic AI ecosystem. Setup guide: [docs/mcp-setup.md](docs/mcp-setup.md).
-2. **It measures itself.** A built-in evaluation harness scores retrieval quality (recall@5, MRR) and answer faithfulness against a golden dataset, and fails CI if quality regresses. Current numbers on the seeded corpus: **recall@5 = 1.000, MRR = 0.854**. Token usage and estimated cost are tracked per request via Micrometer.
+2. **It measures itself.** A built-in evaluation harness scores retrieval quality (recall@5, MRR) and answer faithfulness against a golden dataset, and fails CI if quality regresses. Current numbers on the distractor-hardened corpus: **recall@5 = 0.938, MRR = 0.792, nDCG@5 = 0.817**. Token usage and estimated cost are tracked per request via Micrometer.
 3. **It runs anywhere, keyless.** The `local` profile uses Ollama for chat and embeddings, so anyone can clone the repo and run the full stack with `docker compose up` — no API key required. The `cloud` profile switches to Anthropic or OpenAI with zero code changes. CI runs entirely keyless on an in-process ONNX embedding model and a deterministic stub chat model.
 
 ## If you're reviewing this repo, start here
@@ -231,12 +231,14 @@ The embedding dimension is baked into the `vector_store` schema. **Switching emb
 
 ## Evaluation harness
 
-Quality is a feature. Corpus ships with [`evals/golden-set.yaml`](evals/golden-set.yaml) — 16 question → expected-source → reference-answer cases over the seeded sample documents, one keyword-flavored and one paraphrase question per document (so each retrieval leg is exercised).
+Quality is a feature. Corpus ships with [`evals/golden-set.yaml`](evals/golden-set.yaml) — 32 question → expected-source → reference-answer cases over the seeded sample documents. Six of the 14 documents are deliberate **distractors** that share vocabulary with a real source but answer a different question, and the 14 cases tagged `hard` are the ones whose keywords appear in both. Without them the metrics saturate at 1.000 and no ranking change can be measured.
 
 | Metric | What it measures | Gate | Current |
 |---|---|---|---|
-| `recall@5` | Did retrieval surface the correct source in the top 5? | ≥ 0.85 | **1.000** |
-| `MRR` | How high does the correct source rank? | ≥ 0.70 | **0.854** |
+| `recall@3` | Did retrieval surface the correct source in the top 3? | ≥ 0.82 | **0.875** |
+| `recall@5` | Did retrieval surface the correct source in the top 5? | ≥ 0.88 | **0.938** |
+| `MRR` | How high does the correct source rank? | ≥ 0.74 | **0.792** |
+| `nDCG@5` | Ordering quality within the window | ≥ 0.76 | **0.817** |
 | Faithfulness (LLM-as-judge) | Is the answer grounded in retrieved context? | ≥ 0.80 | nightly |
 | Answer relevance (LLM-as-judge) | Does the answer address the question? | ≥ 0.80 | nightly |
 

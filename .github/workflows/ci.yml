@@ -32,6 +32,20 @@ jobs:
       - name: Build, test, evals, coverage gate
         run: ./gradlew build --no-daemon
 
+      - name: Publish eval summary
+        if: always()
+        run: |
+          {
+            echo "## Retrieval evals"
+            if [ -f build/reports/evals/retrieval.json ]; then
+              echo '```json'
+              cat build/reports/evals/retrieval.json
+              echo '```'
+            else
+              echo "_No retrieval report produced._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload test and eval reports
         if: always()
         uses: actions/upload-artifact@v4

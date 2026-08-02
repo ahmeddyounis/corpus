@@ -17,14 +17,23 @@ meaningful as the set is honest.
 
 ## Retrieval metrics: recall@5 and MRR
 
-Recall@5 asks the binary question per case: did any chunk from the expected
-source document appear in the top five results? Corpus gates the build at
-recall@5 ≥ 0.85. Mean Reciprocal Rank (MRR) is stricter: it averages
-`1 / rank` of the first relevant result, so a system that always finds the
-right document at position one scores 1.0, and one that finds it at position
-three scores 0.33. Corpus gates MRR at ≥ 0.70. Together they catch different
-regressions — recall@5 detects "we lost it entirely," MRR detects "we still
-find it, but it slipped down the list."
+Recall@k asks the binary question per case: did any chunk from the expected
+source document appear in the top k results? Mean Reciprocal Rank (MRR) is
+stricter: it averages `1 / rank` of the first relevant result, so a system that
+always finds the right document at position one scores 1.0, and one that finds
+it at position three scores 0.33. nDCG@5 adds sensitivity to ordering within
+the window, which recall is blind to, and precision@5 reports how much of the
+returned window was actually relevant.
+
+Corpus gates four of them: recall@3 ≥ 0.82, recall@5 ≥ 0.88, MRR ≥ 0.74, and
+nDCG@5 ≥ 0.76. Together they catch different regressions — recall detects "we
+lost it entirely," while MRR and nDCG detect "we still find it, but it slipped
+down the list." recall@3 is the primary gate because it has the most headroom.
+
+The corpus deliberately includes distractor documents that share vocabulary
+with the real sources but answer a different question, so a system matching on
+surface terms alone ranks the wrong document first. Without them the metrics
+saturate at 1.000 and no ranking improvement can be demonstrated.
 
 These retrieval metrics run on every pull request. They are fully
 deterministic: the in-process ONNX embedding model produces identical vectors
