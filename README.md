@@ -44,7 +44,7 @@ Three things make it more than a tutorial RAG app:
 - **Semantic response cache** — per-user, pgvector-backed, invalidated by a corpus-version stamp; its similarity threshold is *measured* against 461 question pairs rather than guessed
 - **Evaluation harness** — golden Q&A set, retrieval metrics (recall@5, MRR), LLM-as-judge faithfulness scoring, wired into CI
 - **LLM observability** — Micrometer metrics for token usage, per-phase latency, and estimated cost per request; Prometheus endpoint; pre-built Grafana dashboard
-- **Security** — stateless JWT auth (Spring Security), per-user document scoping enforced at the storage layer, request rate limiting (Bucket4j)
+- **Security** — stateless JWT auth (Spring Security), per-user document scoping enforced at the storage layer, request rate limiting (Bucket4j), and daily per-user token/cost quotas so a public demo cannot drain a budget
 - **Production hygiene** — Testcontainers integration tests (95% line coverage on core packages, 80% gate), GitHub Actions CI, docker-compose one-command startup, virtual threads enabled
 
 ---
@@ -133,6 +133,7 @@ flowchart LR
 | `POST` | `/api/search` | Retrieval only — ranked chunks with RRF/vector/FTS/rerank scores; `rerank: true\|false` A/Bs ranking per request |
 | `POST` | `/api/chat` | Ask a question; **SSE stream**: `token`* → `citations` → `usage` → `done` |
 | `GET` | `/api/conversations` | List the caller's conversations, newest first (paginated) |
+| `GET` | `/api/usage` | Today's token/cost spend for the caller and the limits in force |
 | `GET` | `/api/conversations/{id}` | Conversation metadata + message history |
 | `GET` | `/actuator/health` \| `/actuator/prometheus` | Health & metrics |
 
@@ -221,6 +222,8 @@ curl -N -X POST localhost:8080/api/chat \
 | `CORPUS_EMBEDDING_CACHE_L1` / `_L2` | `10000` / `100000` | Cache entries per replica / per namespace in Postgres |
 | `CORPUS_RESPONSE_CACHE_ENABLED` | `true` | Per-user semantic answer cache |
 | `CORPUS_RESPONSE_CACHE_THRESHOLD` | `0.72` | Cosine similarity for "same question" — measured, see ADR 0012 |
+| `CORPUS_QUOTA_ENABLED` | `true` | Enforce daily token/cost ceilings (kill switch) |
+| `CORPUS_DAILY_TOKENS` / `_COST_USD` | `1000000` / `5.0` | Per-user daily budget; `user_quotas` overrides per user |
 | `CORPUS_DB_POOL_SIZE` | `10` | Hikari max pool size; `replicas x this` must fit the DB connection cap |
 | `CORPUS_INGESTION_CONCURRENCY` | `4` | Concurrent ingestions before load shedding (503) |
 | `CORPUS_RESILIENCE_ENABLED` | `true` | Circuit breakers around chat/embedding calls |

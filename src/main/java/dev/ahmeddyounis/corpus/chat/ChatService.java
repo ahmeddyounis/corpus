@@ -3,6 +3,7 @@ package dev.ahmeddyounis.corpus.chat;
 import dev.ahmeddyounis.corpus.ops.CostEstimator;
 import dev.ahmeddyounis.corpus.ops.ModelResilience;
 import dev.ahmeddyounis.corpus.ops.RagMetrics;
+import dev.ahmeddyounis.corpus.quota.QuotaService;
 import dev.ahmeddyounis.corpus.retrieval.RetrievalService;
 import dev.ahmeddyounis.corpus.retrieval.ScoredChunk;
 import java.util.ArrayList;
@@ -68,6 +69,7 @@ public class ChatService {
     private final ModelResilience resilience;
     private final CorpusChatProperties chatProperties;
     private final ResponseCache responseCache;
+    private final QuotaService quotas;
     private final ScheduledExecutorService heartbeatScheduler;
     private final String provider;
     private volatile ChatClient chatClient;
@@ -84,6 +86,7 @@ public class ChatService {
                        ModelResilience resilience,
                        CorpusChatProperties chatProperties,
                        ResponseCache responseCache,
+                       QuotaService quotas,
                        @Qualifier("sseHeartbeatScheduler") ScheduledExecutorService heartbeatScheduler,
                        @Value("${spring.ai.model.chat:none}") String provider) {
         this.chatClientBuilder = chatClientBuilder;
@@ -98,6 +101,7 @@ public class ChatService {
         this.resilience = resilience;
         this.chatProperties = chatProperties;
         this.responseCache = responseCache;
+        this.quotas = quotas;
         this.heartbeatScheduler = heartbeatScheduler;
         this.provider = provider;
     }
@@ -108,6 +112,10 @@ public class ChatService {
         // returns its self-documenting 503 rather than serving cached answers
         // for a model it can no longer run.
         ChatClient client = client();
+        // Before the emitter is built: once an SseEmitter is returned the status
+        // line is already 200, and the client would have to parse an error event
+        // to discover it was refused.
+        quotas.checkAllowed(userId);
         SseEmitter emitter = new SseEmitter(chatProperties.sseTimeout().toMillis());
         // SseEmitter is not thread-safe and the heartbeat writes from a different
         // thread than the token loop, so every send goes through one lock.
@@ -160,6 +168,7 @@ public class ChatService {
     /** Non-streaming variant used by the MCP {@code ask_documents} tool. */
     public SyncAnswer answerSync(UUID userId, String question, Integer topK) {
         long start = System.nanoTime();
+        quotas.checkAllowed(userId);
         var cached = responseCache.lookup(userId, question, modelKey(), true);
         if (cached.isPresent()) {
             metrics.recordPhase("full_response", elapsedMs(start));
@@ -185,7 +194,7 @@ public class ChatService {
         ChatResponseMetadata metadata = response != null ? response.getMetadata() : null;
         Usage syncUsage = metadata != null ? metadata.getUsage() : null;
         if (syncUsage != null) {
-            recordUsage(syncUsage.getPromptTokens(), syncUsage.getCompletionTokens(),
+            recordUsage(userId, syncUsage.getPromptTokens(), syncUsage.getCompletionTokens(),
                     metadata.getModel());
         }
         metrics.recordPhase("full_response", elapsedMs(start));
@@ -269,7 +278,7 @@ public class ChatService {
 
             long totalMs = elapsedMs(start);
             metrics.recordPhase("full_response", totalMs);
-            Double cost = usageSeen ? recordUsage(promptTokens, completionTokens, model) : null;
+            Double cost = usageSeen ? recordUsage(userId, promptTokens, completionTokens, model) : null;
 
             send(emitter, sendLock, finished, SseEmitter.event().name("citations").data(citations(chunks)));
             send(emitter, sendLock, finished, SseEmitter.event().name("usage").data(new UsageStats(
@@ -342,16 +351,24 @@ public class ChatService {
         return provider;
     }
 
-    /** Records token/cost metrics; returns the estimated cost when the model is priced. */
-    private Double recordUsage(Integer promptTokens, Integer completionTokens, String model) {
+    /**
+     * Records token/cost metrics and accrues the caller's daily quota; returns the
+     * estimated cost when the model is priced.
+     *
+     * <p>Both paths converge here after real spend, and neither a cache hit nor a
+     * 503 reaches it — so a request that cost nothing never consumes budget.
+     */
+    private Double recordUsage(UUID userId, Integer promptTokens, Integer completionTokens, String model) {
         String modelId = CostEstimator.normalize(model);
         metrics.recordTokens(provider, modelId, promptTokens, completionTokens);
-        return costEstimator.estimate(modelId, promptTokens, completionTokens)
-                .map(cost -> {
-                    metrics.recordCost(provider, modelId, cost);
-                    return cost;
+        Double cost = costEstimator.estimate(modelId, promptTokens, completionTokens)
+                .map(estimated -> {
+                    metrics.recordCost(provider, modelId, estimated);
+                    return estimated;
                 })
                 .orElse(null);
+        quotas.record(userId, promptTokens, completionTokens, cost);
+        return cost;
     }
 
     private List<Citation> citations(List<ScoredChunk> chunks) {

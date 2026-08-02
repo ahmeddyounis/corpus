@@ -188,6 +188,14 @@ corpus:
       # quarter of the quadratic attention cost of the model's 512 ceiling.
       max-length: ${CORPUS_RERANK_MAX_LENGTH:256}
       max-candidates: ${CORPUS_RERANK_MAX_CANDIDATES:40}
+  quota:
+    # Micrometer measures spend; it cannot enforce it (a metric is an export, not
+    # a store). These are the durable ceilings. See ADR 0013.
+    enabled: ${CORPUS_QUOTA_ENABLED:true}
+    # Generous on purpose: the realistic failure on a public demo is a reviewer
+    # hitting a wall three questions in, not overspend.
+    daily-tokens: ${CORPUS_DAILY_TOKENS:1000000}
+    daily-cost-usd: ${CORPUS_DAILY_COST_USD:5.0}
   rate-limit:
     rpm: ${CORPUS_RATE_LIMIT_RPM:30}
     token-rpm: ${CORPUS_TOKEN_RATE_LIMIT_RPM:10}
