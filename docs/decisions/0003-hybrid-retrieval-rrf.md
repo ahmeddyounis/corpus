@@ -29,3 +29,7 @@ fused chunks reach the prompt.
   step (roadmap) and slots in cleanly after the fuser.
 - Full-text ranking is English-configured (`to_tsvector('english', ...)`);
   multilingual corpora would need per-language configuration.
+
+RRF ranks by position agreement between the legs and never scores the query
+and a chunk together. A second stage that does is added in
+[ADR 0010](0010-cross-encoder-reranking.md).

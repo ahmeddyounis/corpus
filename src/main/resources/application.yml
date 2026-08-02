@@ -164,7 +164,20 @@ corpus:
     max-top-k: ${CORPUS_MAX_TOP_K:20}
   rerank:
     # Per-request default; the /api/search `rerank` flag overrides it per call.
-    enabled: ${CORPUS_RERANK_ENABLED:false}
+    enabled: ${CORPUS_RERANK_ENABLED:true}
+    # Bulkhead over CPU-bound ONNX inference; past this, reranking sheds and
+    # retrieval degrades to fusion order rather than queueing behind a busy CPU.
+    concurrency: ${CORPUS_RERANK_CONCURRENCY:0}
+    timeout: ${CORPUS_RERANK_TIMEOUT:2s}
+    model:
+      enabled: ${CORPUS_RERANK_MODEL_ENABLED:true}
+      # Tracks whatever cache directory the profile gave the embedding model, so
+      # both ONNX models land in one cached, one-volume location.
+      cache-directory: ${spring.ai.embedding.transformer.cache.directory:${java.io.tmpdir}/corpus-onnx}
+      # 256 tokens covers a 512-token chunk's leading content at roughly a
+      # quarter of the quadratic attention cost of the model's 512 ceiling.
+      max-length: ${CORPUS_RERANK_MAX_LENGTH:256}
+      max-candidates: ${CORPUS_RERANK_MAX_CANDIDATES:40}
   rate-limit:
     rpm: ${CORPUS_RATE_LIMIT_RPM:30}
     token-rpm: ${CORPUS_TOKEN_RATE_LIMIT_RPM:10}

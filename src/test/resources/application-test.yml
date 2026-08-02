@@ -11,6 +11,12 @@ spring:
           directory: ${user.dir}/.onnx-cache
 
 corpus:
+  rerank:
+    # The eval harness drives both modes explicitly per request, so the default
+    # is off; what matters here is that the model actually loads.
+    enabled: false
+    model:
+      enabled: true
   async:
     # The suite uploads several documents at once; don't let the bulkhead serialize it.
     ingestion-concurrency: 16

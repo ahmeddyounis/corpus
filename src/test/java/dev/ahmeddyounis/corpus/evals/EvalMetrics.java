@@ -45,9 +45,61 @@ public final class EvalMetrics {
 
         public String describe() {
             return String.format(Locale.ROOT,
-                    "%-16s cases=%d  recall@1=%.3f  recall@3=%.3f  recall@5=%.3f  MRR=%.3f  P@5=%.3f  nDCG@5=%.3f",
+                    "%-24s cases=%d  recall@1=%.3f  recall@3=%.3f  recall@5=%.3f  MRR=%.3f  P@5=%.3f  nDCG@5=%.3f",
                     label, cases, recallAt1, recallAt3, recallAt5, mrr, precisionAt5, ndcgAt5);
         }
+    }
+
+    /**
+     * Before/after comparison of two configurations. Every tuning change should
+     * ship with numbers from both sides, which is the difference between
+     * engineering and folklore.
+     */
+    public static String delta(Summary before, Summary after) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("%-12s %8s %8s %8s%n", "metric", "before", "after", "delta"));
+        row(sb, "recall@1", before.recallAt1(), after.recallAt1());
+        row(sb, "recall@3", before.recallAt3(), after.recallAt3());
+        row(sb, "recall@5", before.recallAt5(), after.recallAt5());
+        row(sb, "MRR", before.mrr(), after.mrr());
+        row(sb, "P@5", before.precisionAt5(), after.precisionAt5());
+        row(sb, "nDCG@5", before.ndcgAt5(), after.ndcgAt5());
+        return sb.toString();
+    }
+
+    private static void row(StringBuilder sb, String metric, double before, double after) {
+        sb.append(String.format(Locale.ROOT, "%-12s %8.3f %8.3f %+8.3f%n", metric, before, after, after - before));
+    }
+
+    /** Per-case rank movement, so a mean that barely moved still shows what changed. */
+    public static String movement(List<CaseResult> before, List<CaseResult> after) {
+        java.util.Map<String, CaseResult> afterById = after.stream()
+                .collect(java.util.stream.Collectors.toMap(CaseResult::id, r -> r));
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("%-30s %-8s %-8s %s%n", "case", "before", "after", "movement"));
+        for (CaseResult b : before) {
+            CaseResult a = afterById.get(b.id());
+            if (a == null || a.firstRelevantRank() == b.firstRelevantRank()) {
+                continue;
+            }
+            sb.append(String.format("%-30s %-8s %-8s %s%n", b.id(), rank(b), rank(a),
+                    describeMovement(b.firstRelevantRank(), a.firstRelevantRank())));
+        }
+        return sb.isEmpty() ? "(no case changed rank)%n".formatted() : sb.toString();
+    }
+
+    private static String rank(CaseResult r) {
+        return r.firstRelevantRank() > 0 ? "#" + r.firstRelevantRank() : "MISS";
+    }
+
+    private static String describeMovement(int before, int after) {
+        if (before == 0) {
+            return "RECOVERED";
+        }
+        if (after == 0) {
+            return "LOST";
+        }
+        return after < before ? "up " + (before - after) : "down " + (after - before);
     }
 
     private EvalMetrics() {

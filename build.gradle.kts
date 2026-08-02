@@ -53,6 +53,13 @@ dependencies {
     implementation("org.apache.tika:tika-parsers-standard-package:3.3.2")
     implementation("com.knuddels:jtokkit:1.1.0")
 
+    // Cross-encoder reranking. Both resolve transitively through
+    // spring-ai-starter-model-transformers today; declared explicitly because
+    // reranking depends on them directly and a transitive drop would otherwise
+    // only surface as a runtime NoClassDefFoundError on a Spring AI bump.
+    implementation("com.microsoft.onnxruntime:onnxruntime")
+    implementation("ai.djl.huggingface:tokenizers")
+
     // Resilience: core Resilience4j used programmatically. The Spring Boot 4
     // starter is missing from Resilience4j's BOM, and explicit call-site wrapping
     // avoids proxying/self-invocation pitfalls.
