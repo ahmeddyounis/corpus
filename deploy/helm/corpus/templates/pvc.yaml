@@ -1,0 +1,19 @@
+{{- if .Values.volumes.onnxCache.persistent }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "corpus.fullname" . }}-onnx
+  labels:
+    {{- include "corpus.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    # ReadWriteMany, because every replica mounts this. ReadWriteOnce would leave
+    # all but one replica Pending on a multi-replica deployment.
+    - {{ .Values.volumes.onnxCache.accessMode }}
+  {{- with .Values.volumes.onnxCache.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.volumes.onnxCache.size }}
+{{- end }}

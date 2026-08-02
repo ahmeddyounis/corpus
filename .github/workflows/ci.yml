@@ -39,6 +39,25 @@ jobs:
             -v "$PWD/deploy/helm/corpus/files:/rules" \
             prom/prometheus:v3.1.0 check rules /rules/alerts.yml
 
+      # The chart references application property names and health-group paths.
+      # Validating the rendered output here is what stops it drifting away from
+      # the application it deploys.
+      - name: Lint and validate the Helm chart
+        run: |
+          docker run --rm -v "$PWD/deploy/helm/corpus:/chart" \
+            alpine/helm:3.16.3 lint /chart
+          docker run --rm -v "$PWD/deploy/helm/corpus:/chart" alpine/helm:3.16.3 \
+            template corpus /chart \
+              --set ingress.enabled=true --set serviceMonitor.enabled=true \
+              --set prometheusRule.enabled=true --set networkPolicy.enabled=true \
+              --set autoscaling.enabled=true --set volumes.onnxCache.persistent=true \
+            > rendered.yaml
+          docker run --rm -v "$PWD/rendered.yaml:/manifests.yaml" \
+            ghcr.io/yannh/kubeconform:v0.6.7 -strict -summary \
+              -schema-location default \
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+              /manifests.yaml
+
       - name: Publish eval summary
         if: always()
         run: |

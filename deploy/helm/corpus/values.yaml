@@ -1,0 +1,205 @@
+# Corpus Helm values.
+#
+# The comments here carry the reasoning, not just the defaults. Several of these
+# values are safe *because* of a specific decision elsewhere in the codebase, and
+# changing one without the other reintroduces a bug the project already fixed.
+
+# Two replicas is safe because MCP is served statelessly in deployed profiles
+# (ADR 0009). If that is ever reverted, this must go back to 1 - the streamable
+# transport keeps session state in memory and there are no sticky sessions here.
+replicaCount: 2
+
+image:
+  repository: ghcr.io/ahmeddyounis/corpus
+  pullPolicy: IfNotPresent
+  # Defaults to .Chart.AppVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# `cloud` needs an API key; `keyless` serves ingestion, search, and MCP with no
+# credentials at all and returns a self-documenting 503 from /api/chat.
+profile: cloud
+
+# Non-secret configuration. Anything here lands in a ConfigMap; secrets go in
+# the Secret below or an existing one.
+env:
+  CORPUS_RETRIEVAL_TOP_K: "6"
+  CORPUS_RERANK_ENABLED: "true"
+  CORPUS_EMBEDDING_CACHE_ENABLED: "true"
+  CORPUS_RESPONSE_CACHE_ENABLED: "true"
+  CORPUS_QUOTA_ENABLED: "true"
+  CORPUS_RATE_LIMIT_BACKEND: "postgres"
+
+# Set these for a real deployment, or point existingSecret at a Secret you
+# manage out of band (sealed-secrets, External Secrets, SOPS).
+existingSecret: ""
+secrets:
+  SPRING_DATASOURCE_URL: ""
+  SPRING_DATASOURCE_USERNAME: ""
+  SPRING_DATASOURCE_PASSWORD: ""
+  CORPUS_JWT_SECRET: ""
+  ANTHROPIC_API_KEY: ""
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations:
+    # SSE dies behind a buffering proxy. The application also sets
+    # X-Accel-Buffering, but an ingress that buffers regardless would still
+    # break streaming, so it is disabled here too.
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # Comfortably above the application's own 120s SSE timeout, so the stream
+    # ends on the application's terms rather than being cut by the proxy.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "180"
+  hosts:
+    - host: corpus.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    # Memory only, deliberately no CPU limit. CFS throttling is pathological for
+    # a JVM: it stalls GC threads and virtual-thread carriers at arbitrary points,
+    # turning a p95 latency problem into a p99 cliff. Requests still give the
+    # scheduler what it needs. Sized against MaxRAMPercentage=70, which the two
+    # in-process ONNX models (embedding + cross-encoder) also live inside.
+    memory: 2Gi
+
+# Probe paths match the actuator health groups exactly (ADR: B2). The circuit
+# breaker is deliberately NOT in the readiness group - a shared provider outage
+# would otherwise take every replica out of rotation, including for /api/search,
+# which needs no chat model.
+probes:
+  startup:
+    # First boot downloads and loads two ONNX models. Gating liveness behind a
+    # startup probe is what stops a slow cold start becoming a restart loop.
+    path: /actuator/health/readiness
+    periodSeconds: 5
+    failureThreshold: 30
+  readiness:
+    path: /actuator/health/readiness
+    periodSeconds: 10
+    failureThreshold: 3
+  liveness:
+    path: /actuator/health/liveness
+    periodSeconds: 20
+    failureThreshold: 3
+
+# 60s > the 45s spring.lifecycle.timeout-per-shutdown-phase, which is itself >
+# the 30s ingestion drain. If this is lowered below the lifecycle budget, SIGKILL
+# lands mid-drain and in-flight ingestions are lost - the exact failure the
+# bounded executor shutdown exists to prevent.
+terminationGracePeriodSeconds: 60
+
+# Endpoint removal is eventually consistent: without this pause the pod can stop
+# accepting connections before every proxy has stopped sending them.
+preStopSleepSeconds: 5
+
+updateStrategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    # Zero, so a rollout never drops below the desired replica count. This is
+    # also precisely the scenario that used to corrupt ingestion before sweeps
+    # became ownership-scoped (ADR 0008).
+    maxUnavailable: 0
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+autoscaling:
+  # Off by default, and the honest reason is that CPU is a poor proxy for load in
+  # a service that spends most of a request blocked on a provider socket: it can
+  # be saturated in requests while nearly idle in CPU. The right signals are
+  # in-flight requests or the phase p95 histograms, via prometheus-adapter or
+  # KEDA. Enabling this as-is would give you an autoscaler that scales on the
+  # wrong thing, which is worse than none.
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+serviceMonitor:
+  # Requires the Prometheus Operator CRDs.
+  enabled: false
+  interval: 15s
+  scrapeTimeout: 10s
+  labels: {}
+
+prometheusRule:
+  # Renders files/alerts.yml - the same file docker-compose mounts, so the two
+  # environments alert on identical expressions.
+  enabled: false
+  labels: {}
+
+networkPolicy:
+  # Default-deny ingress except from the ingress controller and Prometheus.
+  # Egress stays open: the service needs Postgres, an LLM provider, and (on first
+  # boot) HuggingFace for the ONNX models.
+  enabled: false
+  ingressNamespace: ingress-nginx
+  monitoringNamespace: monitoring
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+# The image extracts its ONNX native library to /tmp and caches models under
+# /var/cache/corpus-onnx. With a read-only root filesystem both need writable
+# mounts, and /tmp must be executable - ONNX Runtime System.load()s the .so it
+# extracts there, which a noexec mount silently breaks.
+volumes:
+  tmpSizeLimit: 512Mi
+  onnxCache:
+    # emptyDir re-downloads ~120 MB of models on every pod start. A PVC keeps
+    # them, but ReadWriteOnce will not attach to multiple replicas - use
+    # ReadWriteMany, or leave this off and accept the cold-start cost.
+    persistent: false
+    size: 1Gi
+    storageClass: ""
+    accessMode: ReadWriteMany
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Spread replicas across nodes so a single node failure cannot take the whole
+# service out. ScheduleAnyway rather than DoNotSchedule: on a single-node cluster
+# a hard constraint would leave the second replica permanently Pending.
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: corpus

@@ -1,0 +1,13 @@
+apiVersion: v2
+name: corpus
+description: Production-grade RAG service with hybrid retrieval, cross-encoder reranking, and an MCP server
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/ahmeddyounis/corpus
+sources:
+  - https://github.com/ahmeddyounis/corpus
+keywords: [rag, llm, mcp, pgvector, spring-boot]
+maintainers:
+  - name: ahmeddyounis
+    url: https://github.com/ahmeddyounis

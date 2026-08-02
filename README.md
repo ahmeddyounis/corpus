@@ -27,6 +27,7 @@ Three things make it more than a tutorial RAG app:
 - 🔍 **Hybrid search + RRF** — [`retrieval/RetrievalService.java`](src/main/java/dev/ahmeddyounis/corpus/retrieval/RetrievalService.java), [`retrieval/RrfFuser.java`](src/main/java/dev/ahmeddyounis/corpus/retrieval/RrfFuser.java)
 - 📈 **Token & cost metrics** — [`ops/RagMetrics.java`](src/main/java/dev/ahmeddyounis/corpus/ops/RagMetrics.java), `/actuator/prometheus`, [Grafana dashboard](docs/grafana-dashboard.json)
 - 📐 **Design decisions (ADRs)** — [docs/decisions/](docs/decisions/)
+- ☸️ **Deployment** — [Helm chart](deploy/helm/corpus/) with probes matching the actuator health groups, PDB, NetworkPolicy, and a `PrometheusRule` rendered from the same alert file compose uses; `helm lint` + `kubeconform -strict` run in CI
 
 ---
 

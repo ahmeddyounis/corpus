@@ -1,0 +1,33 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "corpus.fullname" . }}
+  labels:
+    {{- include "corpus.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "corpus.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace }}
+      ports:
+        - port: http
+          protocol: TCP
+    # Prometheus scrapes /actuator/prometheus on the same port.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.monitoringNamespace }}
+      ports:
+        - port: http
+          protocol: TCP
+  # Egress is deliberately unrestricted: the service needs Postgres, an LLM
+  # provider over the internet, and - on a cold start with no cached models -
+  # HuggingFace. A default-deny egress policy here would fail at boot in a way
+  # that looks like a broken image.
+{{- end }}
