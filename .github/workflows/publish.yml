@@ -68,7 +68,7 @@ jobs:
       # Signed, verifiable evidence of which workflow and commit produced this
       # image. `gh attestation verify` checks it without any key distribution.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v3
         with:
           subject-name: ghcr.io/${{ github.repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
