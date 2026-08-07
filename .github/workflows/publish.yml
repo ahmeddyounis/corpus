@@ -85,7 +85,7 @@ jobs:
       # Scans the published image rather than a locally rebuilt one, so the
       # result describes the artifact that actually exists in the registry.
       - name: Trivy scan (fail on HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@0.29.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ghcr.io/${{ github.repository }}@${{ needs.publish.outputs.digest }}
           format: sarif
